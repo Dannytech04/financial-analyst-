@@ -1,0 +1,8 @@
+{
+  "name": "ForexPro AI Tracker",
+  "description": "A high-performance Forex journaling and progress tracking application integrated with Gemini AI for deep market analysis, real-time news search grounding, and strategic thinking.",
+  "requestFramePermissions": [
+    "geolocation",
+    "camera"
+  ]
+}
