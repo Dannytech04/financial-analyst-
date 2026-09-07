@@ -1,0 +1,98 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "User account profile details and client-controlled preferences",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "username": { "type": "string", "maxLength": 128 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "balance": { "type": "number", "minimum": 0, "maximum": 1000000000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "username"]
+    },
+    "Trade": {
+      "title": "Trade Record",
+      "description": "Journaled trade entries with strict typing and numeric bounds",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "tradeId": { "type": "string", "maxLength": 128 },
+        "pair": { "type": "string", "maxLength": 20 },
+        "type": { "type": "string", "enum": ["BUY", "SELL"] },
+        "entryPrice": { "type": "number", "minimum": 0.000001, "maximum": 1000000 },
+        "exitPrice": { "type": "number", "minimum": 0.000001, "maximum": 1000000 },
+        "lotSize": { "type": "number", "minimum": 0.001, "maximum": 1000 },
+        "pnl": { "type": "number", "minimum": -10000000, "maximum": 10000000 },
+        "status": { "type": "string", "enum": ["WIN", "LOSS", "BE"] },
+        "session": { "type": "string", "enum": ["LONDON", "NEW_YORK", "ASIAN", "OVERLAP"] },
+        "timestamp": { "type": "number", "minimum": 1, "maximum": 4102444800000 },
+        "notes": { "type": "string", "maxLength": 2000 },
+        "riskPercent": { "type": "number", "minimum": 0, "maximum": 100 },
+        "aiFeedback": { "type": "string", "maxLength": 5000 },
+        "isAnalyzing": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "pair", "type", "entryPrice", "lotSize", "pnl", "status", "session", "timestamp"]
+    },
+    "UserGoals": {
+      "title": "User Goals",
+      "description": "Target parameters for monthly trading performance",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "monthlyProfitTarget": { "type": "number", "minimum": 0, "maximum": 10000000 },
+        "winRateTarget": { "type": "number", "minimum": 0, "maximum": 100 },
+        "tradesPerMonthTarget": { "type": "number", "minimum": 0, "maximum": 10000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "monthlyProfitTarget", "winRateTarget", "tradesPerMonthTarget"]
+    },
+    "UserSubscription": {
+      "title": "User Subscription and Usage Metadata",
+      "description": "Protected subscription tier and server-controlled AI usage limits",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "tier": { "type": "string", "enum": ["FREE", "PRO", "ELITE"] },
+        "status": { "type": "string", "enum": ["ACTIVE", "TRIALING", "CANCELLED", "EXPIRED"] },
+        "subscriptionExpiry": { "type": "number", "minimum": 0, "maximum": 4102444800000 },
+        "usageCount": {
+          "type": "object",
+          "properties": {
+            "vision": { "type": "number", "minimum": 0, "maximum": 100000 },
+            "audit": { "type": "number", "minimum": 0, "maximum": 100000 }
+          },
+          "required": ["vision", "audit"]
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "tier", "status", "usageCount"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile document with client-editable metadata and strict field isolation"
+    },
+    "/users/{userId}/trades/{tradeId}": {
+      "schema": "Trade",
+      "description": "User trade records subcollection with strict field and enum validation"
+    },
+    "/users/{userId}/goals/settings": {
+      "schema": "UserGoals",
+      "description": "User monthly performance target settings document"
+    },
+    "/users/{userId}/subscription/current": {
+      "schema": "UserSubscription",
+      "description": "User protected subscription tier and monotonic usage limits document"
+    }
+  }
+}

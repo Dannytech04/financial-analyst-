@@ -1,21 +1,22 @@
-
 import React, { useState, useRef } from 'react';
-import { analyzeTradeChart } from '../services/geminiService';
+import { analyzeTradeChart } from '@/services/geminiService';
+import { ChartAnalysisResult } from '@/types';
 
 const ChartAnalyzer: React.FC = () => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [mimeType, setMimeType] = useState<string>('');
-  const [analysis, setAnalysis] = useState<string | null>(null);
+  const [analysis, setAnalysis] = useState<ChartAnalysisResult | string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
+  const processFile = (file: File) => {
+    if (file && file.type.startsWith('image/')) {
       setMimeType(file.type);
       const reader = new FileReader();
       reader.onloadend = () => {
-        const base64String = (reader.result as string).split(',')[1];
+        const result = reader.result as string;
+        const base64String = result.split(',')[1];
         setSelectedImage(base64String);
         setAnalysis(null);
       };
@@ -23,127 +24,230 @@ const ChartAnalyzer: React.FC = () => {
     }
   };
 
-  const handleAnalyze = async () => {
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>): void => {
+    const file = e.target.files?.[0];
+    if (file) processFile(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) processFile(file);
+  };
+
+  const handleAnalyze = async (): Promise<void> => {
     if (!selectedImage || !mimeType) return;
     setLoading(true);
     try {
       const result = await analyzeTradeChart(selectedImage, mimeType);
       setAnalysis(result);
-    } catch (error) {
-      console.error(error);
-      setAnalysis("Technical analysis failed. Please try a different chart screenshot.");
+    } catch (error: unknown) {
+      const err = error as Error;
+      setAnalysis(`[PROTOCOL_ERROR] ${err.message}`);
     } finally {
       setLoading(false);
     }
   };
 
-  const triggerFileInput = () => {
-    fileInputRef.current?.click();
+  const isStructuredResult = (res: any): res is ChartAnalysisResult => {
+    return typeof res === 'object' && res !== null && 'marketStructure' in res;
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 pb-20 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="bg-emerald-600 rounded-3xl p-8 text-white shadow-xl shadow-emerald-600/20 flex flex-col md:flex-row justify-between items-center gap-6">
+    <div className="max-w-5xl mx-auto space-y-8 pb-32 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="bg-slate-900 rounded-[2.5rem] p-10 text-white shadow-2xl border border-slate-800 flex flex-col md:flex-row justify-between items-center gap-10">
         <div className="flex-1">
-          <h3 className="text-2xl font-bold mb-2 flex items-center gap-3">
-            <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-            Alpha Vision
+          <h3 className="text-3xl font-black mb-2 flex items-center gap-4 uppercase tracking-tighter italic">
+            Alpha Vision Core
           </h3>
-          <p className="opacity-80">Upload a chart screenshot. Gemini 3 Pro will identify trends, patterns, and high-probability zones.</p>
+          <p className="opacity-60 text-[10px] font-black uppercase tracking-[0.3em]">
+            Institutional Computer Vision Uplink Active (Gemini 3.6 Flash)
+          </p>
         </div>
         <button 
-          onClick={triggerFileInput}
-          className="bg-white text-emerald-600 px-8 py-3 rounded-2xl font-bold hover:bg-emerald-50 transition-all flex items-center gap-2"
+          onClick={() => fileInputRef.current?.click()} 
+          className="bg-white text-slate-900 px-10 py-5 rounded-3xl font-black text-[11px] uppercase tracking-[0.3em] hover:scale-105 active:scale-95 transition-all flex items-center gap-3 shadow-xl"
         >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-          Upload Chart
+          Initialize Scan
         </button>
-        <input 
-          type="file" 
-          ref={fileInputRef} 
-          onChange={handleFileChange} 
-          accept="image/*" 
-          className="hidden" 
-        />
+        <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*" className="hidden" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl overflow-hidden shadow-sm flex flex-col min-h-[400px]">
-          <div className="p-6 border-b border-slate-100 dark:border-slate-800">
-            <h4 className="font-bold text-sm uppercase tracking-widest text-slate-400">Target Visual</h4>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[2.5rem] overflow-hidden shadow-sm min-h-[500px]">
+          <div className="p-8 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/30 flex justify-between items-center">
+            <h4 className="font-black text-[10px] uppercase tracking-[0.4em] text-slate-400 italic">Visual Buffer</h4>
+            {selectedImage && (
+              <span className="text-[9px] font-bold text-violet-500 uppercase tracking-widest">Image Loaded</span>
+            )}
           </div>
-          <div className="flex-1 flex items-center justify-center p-6 relative">
+          <div 
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            className={`p-10 flex flex-col items-center justify-center h-full relative transition-colors ${
+              isDragging ? 'bg-violet-500/10 border-2 border-dashed border-violet-500' : ''
+            }`}
+          >
             {selectedImage ? (
-              <div className="relative w-full h-full min-h-[300px] flex flex-col items-center gap-6">
-                <img 
-                  src={`data:${mimeType};base64,${selectedImage}`} 
-                  alt="Trading Chart" 
-                  className="max-w-full max-h-[400px] rounded-xl shadow-lg border border-slate-200 dark:border-slate-700 object-contain"
-                />
-                {!loading && !analysis && (
-                  <button 
-                    onClick={handleAnalyze}
-                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-10 py-3 rounded-xl shadow-lg shadow-emerald-600/20 active:scale-95 transition-all"
-                  >
-                    Initiate Technical Audit
+              <div className="w-full flex flex-col items-center gap-8">
+                <div className="relative group">
+                  <div className="absolute inset-0 bg-violet-600/10 blur-2xl opacity-0 group-hover:opacity-100 transition-opacity rounded-full"></div>
+                  <img src={`data:${mimeType};base64,${selectedImage}`} alt="Scan" className="max-w-full max-h-[350px] rounded-3xl shadow-2xl border-2 border-slate-200 dark:border-slate-700 object-contain relative z-10" />
+                </div>
+                {!loading && (
+                  <button onClick={handleAnalyze} className="bg-violet-600 hover:bg-violet-500 text-white font-black px-12 py-5 rounded-3xl text-[11px] uppercase tracking-[0.4em] shadow-2xl shadow-violet-600/20 active:scale-95 transition-all">
+                    Start AI Diagnostic
                   </button>
                 )}
               </div>
             ) : (
-              <div onClick={triggerFileInput} className="flex flex-col items-center justify-center text-center cursor-pointer group opacity-40 hover:opacity-100 transition-opacity">
-                <div className="w-16 h-16 bg-slate-100 dark:bg-slate-800 rounded-2xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                  <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+              <div onClick={() => fileInputRef.current?.click()} className="cursor-pointer group flex flex-col items-center py-20 px-10">
+                <div className="w-24 h-24 bg-slate-100 dark:bg-slate-800 rounded-[2rem] flex items-center justify-center mb-8 group-hover:bg-violet-500 transition-all group-hover:scale-110">
+                   <svg className="w-10 h-10 text-slate-400 group-hover:text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
                 </div>
-                <p className="font-bold text-xs uppercase tracking-widest text-slate-500">No Image Detected</p>
-                <p className="text-[10px] mt-1">Tap to select chart file</p>
+                <p className="text-[10px] font-black uppercase tracking-[0.4em] text-slate-400 opacity-60">Awaiting Visual Input (Drag & Drop or Click)</p>
               </div>
             )}
-            
             {loading && (
-              <div className="absolute inset-0 bg-white/80 dark:bg-slate-900/80 backdrop-blur-sm z-10 flex flex-col items-center justify-center">
-                <div className="w-12 h-12 border-4 border-emerald-500/20 border-t-emerald-500 rounded-full animate-spin mb-4"></div>
-                <p className="text-sm font-bold animate-pulse">Alpha Vision Scanning Chart...</p>
-                <p className="text-[10px] uppercase font-black tracking-widest text-slate-400 mt-2">Pattern Recognition Active</p>
+              <div className="absolute inset-0 bg-white/95 dark:bg-slate-950/95 backdrop-blur-md z-20 flex flex-col items-center justify-center p-12 text-center animate-in fade-in">
+                <div className="w-16 h-16 border-4 border-violet-500/20 border-t-violet-500 rounded-full animate-spin mb-8 shadow-2xl shadow-violet-600/20"></div>
+                <p className="text-[11px] font-black uppercase tracking-[0.5em] text-violet-600 animate-pulse">Running Vision Diagnostic...</p>
+                <p className="text-[9px] font-bold uppercase text-slate-400 mt-4 tracking-widest max-w-[240px] leading-relaxed">Extracting market structure, support/resistance, and invalidation...</p>
               </div>
             )}
           </div>
         </div>
 
-        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 shadow-sm flex flex-col min-h-[400px]">
-          <div className="flex items-center justify-between mb-6">
-            <h4 className="font-bold text-sm uppercase tracking-widest text-slate-400">Technical Briefing</h4>
-            {analysis && (
-              <span className="text-[9px] font-black bg-emerald-500/10 text-emerald-600 px-2 py-0.5 rounded uppercase tracking-[0.2em]">Validated by Gemini 3 Pro</span>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-[2.5rem] p-10 shadow-sm min-h-[500px] flex flex-col">
+          <div className="flex items-center justify-between mb-8 border-b border-slate-100 dark:border-slate-800 pb-6">
+            <h4 className="font-black text-[10px] uppercase tracking-[0.4em] text-slate-400 italic">Structured Technical Output</h4>
+            {isStructuredResult(analysis) && (
+              <span className="text-[9px] font-bold px-3 py-1 bg-violet-500/10 text-violet-500 rounded-full uppercase tracking-wider">
+                {analysis.symbol || 'Instrument'} · {analysis.timeframe || 'Timeframe'}
+              </span>
             )}
           </div>
-          
-          <div className="flex-1 overflow-y-auto pr-2">
+          <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
             {analysis ? (
-              <div className="prose prose-slate dark:prose-invert prose-sm max-w-none animate-in fade-in slide-in-from-right-4 duration-500">
-                <div className="whitespace-pre-wrap leading-relaxed text-slate-700 dark:text-slate-300 font-medium">
-                  {analysis}
+              typeof analysis === 'string' ? (
+                <div className="prose prose-slate dark:prose-invert max-w-none text-sm font-bold tracking-tight leading-relaxed opacity-90 animate-in slide-in-from-bottom-2">
+                  {analysis.includes('[PROTOCOL_ERROR]') ? (
+                    <div className="p-6 bg-rose-500/5 border border-rose-500/20 rounded-3xl">
+                       <p className="text-rose-500 uppercase tracking-widest text-[11px] mb-2 font-black">Quota / Access Restricted</p>
+                       <p className="text-slate-500 dark:text-slate-400 font-medium italic leading-relaxed">{analysis.replace('[PROTOCOL_ERROR] ', '')}</p>
+                    </div>
+                  ) : (
+                    <p className="whitespace-pre-wrap">{analysis}</p>
+                  )}
                 </div>
-              </div>
+              ) : (
+                <div className="space-y-6 animate-in slide-in-from-bottom-2 text-slate-800 dark:text-slate-200">
+                  {/* Top Stats */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-100 dark:border-slate-800">
+                      <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400 block mb-1">Market Structure</span>
+                      <span className="font-extrabold text-xs tracking-tight text-violet-600 dark:text-violet-400">{analysis.marketStructure}</span>
+                    </div>
+                    <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-100 dark:border-slate-800">
+                      <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400 block mb-1">Trend Direction</span>
+                      <span className={`font-extrabold text-xs tracking-tight ${
+                        analysis.trend.toLowerCase().includes('bull') ? 'text-emerald-500' :
+                        analysis.trend.toLowerCase().includes('bear') ? 'text-rose-500' : 'text-amber-500'
+                      }`}>{analysis.trend}</span>
+                    </div>
+                  </div>
+
+                  {/* Support & Resistance Levels */}
+                  <div className="space-y-3">
+                    <div>
+                      <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400 block mb-2">Key Support Levels</span>
+                      <div className="flex flex-wrap gap-2">
+                        {analysis.supportLevels?.map((s, idx) => (
+                          <span key={idx} className="text-[11px] font-mono font-bold px-3 py-1 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 rounded-xl border border-emerald-500/20">
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400 block mb-2">Key Resistance Levels</span>
+                      <div className="flex flex-wrap gap-2">
+                        {analysis.resistanceLevels?.map((r, idx) => (
+                          <span key={idx} className="text-[11px] font-mono font-bold px-3 py-1 bg-rose-500/10 text-rose-600 dark:text-rose-400 rounded-xl border border-rose-500/20">
+                            {r}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Key Zones & Invalidation */}
+                  <div className="space-y-3">
+                    {analysis.keyZones && analysis.keyZones.length > 0 && (
+                      <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-100 dark:border-slate-800">
+                        <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400 block mb-1">Key Order / Liquidity Zones</span>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {analysis.keyZones.map((zone, idx) => (
+                            <span key={idx} className="text-[10px] font-medium px-2.5 py-1 bg-violet-500/10 text-violet-600 dark:text-violet-300 rounded-lg">
+                              {zone}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="p-4 bg-amber-500/5 border border-amber-500/20 rounded-2xl">
+                      <span className="text-[9px] font-black uppercase tracking-widest text-amber-500 block mb-1">Invalidation Threshold</span>
+                      <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">{analysis.invalidation}</p>
+                    </div>
+                  </div>
+
+                  {/* Observations */}
+                  {analysis.observations && analysis.observations.length > 0 && (
+                    <div>
+                      <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400 block mb-2">Key Technical Observations</span>
+                      <ul className="space-y-1.5 pl-2">
+                        {analysis.observations.map((obs, idx) => (
+                          <li key={idx} className="text-xs text-slate-600 dark:text-slate-300 flex items-start gap-2">
+                            <span className="text-violet-500 font-bold">•</span>
+                            <span>{obs}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Confidence & Probabilistic Disclaimer */}
+                  <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">Confidence Metric</span>
+                      <span className="text-[10px] font-bold text-slate-600 dark:text-slate-300">{analysis.confidence}</span>
+                    </div>
+                    <p className="text-[9px] text-slate-400 dark:text-slate-500 italic leading-relaxed">
+                      {analysis.disclaimer || 'Probabilistic assessment only. Technical levels represent historical confluence and do not guarantee future price action.'}
+                    </p>
+                  </div>
+                </div>
+              )
             ) : (
-              <div className="h-full flex flex-col items-center justify-center opacity-30 text-center py-20">
-                <svg className="w-16 h-16 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-                <p className="font-bold text-sm uppercase tracking-widest">Awaiting Data Stream</p>
-                <p className="text-[10px] mt-2 max-w-[200px]">Upload a chart to receive AI-powered technical analysis.</p>
+              <div className="h-full flex flex-col items-center justify-center opacity-20 py-20 text-center">
+                <div className="w-16 h-1 border-t-2 border-slate-300 dark:border-slate-700 mb-4"></div>
+                <p className="text-[10px] font-black uppercase tracking-[0.4em]">Decryption Buffer Empty</p>
               </div>
             )}
           </div>
-          
-          {analysis && (
-            <div className="mt-6 pt-6 border-t border-slate-100 dark:border-slate-800">
-              <button 
-                onClick={() => { setSelectedImage(null); setAnalysis(null); }}
-                className="text-xs font-bold text-rose-500 hover:text-rose-600 uppercase tracking-widest flex items-center gap-2"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                Purge Vision Cache
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </div>

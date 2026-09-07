@@ -1,0 +1,207 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Functions ---
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- User Profile Validation (/users/{userId}) ---
+    // Allowed keys: userId, username, displayName, email, balance, createdAt, updatedAt
+    // Client-editable: username, displayName, email, balance, updatedAt
+    // Immutable: userId, createdAt
+    // Server-controlled: tier, usageCount, subscriptionExpiry have been moved to /users/{userId}/subscription/current
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['userId', 'username']) &&
+             ['userId', 'username', 'displayName', 'email', 'balance', 'createdAt', 'updatedAt'].hasAll(data.keys()) &&
+             data.userId == userId &&
+             data.userId == request.auth.uid &&
+             data.username is string && data.username.size() >= 1 && data.username.size() <= 128 &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() <= 128)) &&
+             (!('email' in data) || (data.email is string && data.email.size() <= 256)) &&
+             (!('balance' in data) || (data.balance is number && data.balance >= 0 && data.balance <= 1000000000)) &&
+             (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+             (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    // --- Trade Validation (/users/{userId}/trades/{tradeId}) ---
+    // Required: userId, pair, type, entryPrice, lotSize, pnl, status, session, timestamp
+    function isValidTrade(data, userId, tradeId) {
+      return data.keys().hasAll(['userId', 'pair', 'type', 'entryPrice', 'lotSize', 'pnl', 'status', 'session', 'timestamp']) &&
+             ['userId', 'tradeId', 'pair', 'type', 'entryPrice', 'exitPrice', 'lotSize', 'pnl', 'status', 'session', 'timestamp', 'notes', 'riskPercent', 'aiFeedback', 'isAnalyzing', 'createdAt', 'updatedAt'].hasAll(data.keys()) &&
+             data.userId == userId &&
+             data.userId == request.auth.uid &&
+             (!('tradeId' in data) || (data.tradeId == tradeId)) &&
+             data.pair is string && data.pair.size() >= 1 && data.pair.size() <= 20 &&
+             data.type is string && (data.type == 'BUY' || data.type == 'SELL') &&
+             data.entryPrice is number && data.entryPrice > 0 && data.entryPrice <= 1000000 &&
+             (!('exitPrice' in data) || (data.exitPrice is number && data.exitPrice > 0 && data.exitPrice <= 1000000)) &&
+             data.lotSize is number && data.lotSize > 0 && data.lotSize <= 1000 &&
+             data.pnl is number && data.pnl >= -10000000 && data.pnl <= 10000000 &&
+             data.status is string && (data.status == 'WIN' || data.status == 'LOSS' || data.status == 'BE') &&
+             data.session is string && (data.session == 'LONDON' || data.session == 'NEW_YORK' || data.session == 'ASIAN' || data.session == 'OVERLAP') &&
+             data.timestamp is number && data.timestamp > 0 && data.timestamp <= 4102444800000 &&
+             (!('notes' in data) || (data.notes is string && data.notes.size() <= 2000)) &&
+             (!('riskPercent' in data) || (data.riskPercent is number && data.riskPercent >= 0 && data.riskPercent <= 100)) &&
+             (!('aiFeedback' in data) || (data.aiFeedback is string && data.aiFeedback.size() <= 5000)) &&
+             (!('isAnalyzing' in data) || data.isAnalyzing is bool) &&
+             (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+             (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    // --- User Goals Validation (/users/{userId}/goals/settings) ---
+    function isValidUserGoals(data, userId) {
+      return data.keys().hasAll(['userId', 'monthlyProfitTarget', 'winRateTarget', 'tradesPerMonthTarget']) &&
+             ['userId', 'monthlyProfitTarget', 'winRateTarget', 'tradesPerMonthTarget', 'createdAt', 'updatedAt'].hasAll(data.keys()) &&
+             data.userId == userId &&
+             data.userId == request.auth.uid &&
+             data.monthlyProfitTarget is number && data.monthlyProfitTarget >= 0 && data.monthlyProfitTarget <= 10000000 &&
+             data.winRateTarget is number && data.winRateTarget >= 0 && data.winRateTarget <= 100 &&
+             data.tradesPerMonthTarget is number && data.tradesPerMonthTarget >= 0 && data.tradesPerMonthTarget <= 10000 &&
+             (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+             (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    // --- User Subscription Validation (/users/{userId}/subscription/current) ---
+    function isValidSubscription(data, userId) {
+      return data.keys().hasAll(['userId', 'tier', 'status', 'usageCount']) &&
+             ['userId', 'tier', 'status', 'subscriptionExpiry', 'usageCount', 'createdAt', 'updatedAt'].hasAll(data.keys()) &&
+             data.userId == userId &&
+             data.userId == request.auth.uid &&
+             data.tier is string && (data.tier == 'FREE' || data.tier == 'PRO' || data.tier == 'ELITE') &&
+             data.status is string && (data.status == 'ACTIVE' || data.status == 'TRIALING' || data.status == 'CANCELLED' || data.status == 'EXPIRED') &&
+             (!('subscriptionExpiry' in data) || data.subscriptionExpiry == null || (data.subscriptionExpiry is number && data.subscriptionExpiry >= 0 && data.subscriptionExpiry <= 4102444800000)) &&
+             data.usageCount is map &&
+             data.usageCount.keys().hasAll(['vision', 'audit']) &&
+             ['vision', 'audit'].hasAll(data.usageCount.keys()) &&
+             data.usageCount.vision is number && data.usageCount.vision >= 0 && data.usageCount.vision <= 100000 &&
+             data.usageCount.audit is number && data.usageCount.audit >= 0 && data.usageCount.audit <= 100000 &&
+             (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+             (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    // --- Collections & Paths ---
+
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false; // Deny listing of all user accounts
+      
+      // Profile creation: can only set allowed client profile fields
+      allow create: if isOwner(userId) && 
+                       isValidId(userId) && 
+                       isValidUserProfile(incoming(), userId);
+
+      // Profile update: cannot modify immutable userId or createdAt, no ghost fields
+      allow update: if isOwner(userId) && 
+                       isValidId(userId) && 
+                       isValidUserProfile(incoming(), userId) &&
+                       incoming().userId == existing().userId &&
+                       (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['username', 'displayName', 'email', 'balance', 'updatedAt', 'createdAt']);
+
+      allow delete: if false; // Deletion of user profile via client SDK is forbidden
+
+      // Trades subcollection
+      match /trades/{tradeId} {
+        allow get: if isOwner(userId) && isValidId(tradeId);
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) && 
+                         isValidId(tradeId) && 
+                         isValidTrade(incoming(), userId, tradeId);
+
+        allow update: if isOwner(userId) && 
+                         isValidId(tradeId) && 
+                         isValidTrade(incoming(), userId, tradeId) &&
+                         incoming().userId == existing().userId &&
+                         (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'tradeId', 'pair', 'type', 'entryPrice', 'exitPrice', 'lotSize', 
+                           'pnl', 'status', 'session', 'timestamp', 'notes', 'riskPercent', 
+                           'aiFeedback', 'isAnalyzing', 'updatedAt'
+                         ]);
+
+        allow delete: if isOwner(userId) && isValidId(tradeId);
+      }
+
+      // Goals subcollection (fixed document ID: 'settings')
+      match /goals/{goalDoc} {
+        allow get: if isOwner(userId) && goalDoc == 'settings';
+        allow list: if isOwner(userId);
+
+        allow create: if isOwner(userId) && 
+                         goalDoc == 'settings' && 
+                         isValidUserGoals(incoming(), userId);
+
+        allow update: if isOwner(userId) && 
+                         goalDoc == 'settings' && 
+                         isValidUserGoals(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly([
+                           'monthlyProfitTarget', 'winRateTarget', 'tradesPerMonthTarget', 'updatedAt'
+                         ]);
+
+        allow delete: if false;
+      }
+
+      // Subscription subcollection (fixed document ID: 'current')
+      match /subscription/{subDoc} {
+        allow get: if isOwner(userId) && subDoc == 'current';
+        allow list: if isOwner(userId);
+
+        // Client create: can only initialize FREE tier with 0 usage counters
+        allow create: if isOwner(userId) && 
+                         subDoc == 'current' && 
+                         isValidSubscription(incoming(), userId) &&
+                         incoming().tier == 'FREE' &&
+                         incoming().status == 'ACTIVE' &&
+                         incoming().usageCount.vision == 0 &&
+                         incoming().usageCount.audit == 0 &&
+                         (!('subscriptionExpiry' in incoming()) || incoming().subscriptionExpiry == null || incoming().subscriptionExpiry == 0);
+
+        // Client update: 
+        // 1. Cannot change tier (server controlled)
+        // 2. Cannot change subscriptionExpiry (server controlled)
+        // 3. Cannot decrease usageCount (prevent extra AI usage exploit)
+        // 4. Cannot change userId
+        // 5. Only usageCount and updatedAt are client-writable
+        allow update: if isOwner(userId) && 
+                         subDoc == 'current' && 
+                         isValidSubscription(incoming(), userId) &&
+                         incoming().userId == existing().userId &&
+                         incoming().tier == existing().tier &&
+                         ((!('subscriptionExpiry' in existing()) && !('subscriptionExpiry' in incoming())) || incoming().subscriptionExpiry == existing().subscriptionExpiry) &&
+                         incoming().usageCount.vision >= existing().usageCount.vision &&
+                         incoming().usageCount.audit >= existing().usageCount.audit &&
+                         (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt) &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['usageCount', 'updatedAt']);
+
+        allow delete: if false;
+      }
+    }
+  }
+}

@@ -1,0 +1,120 @@
+@keyframes pulse-neon {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; filter: brightness(1.2); }
+}
+
+@keyframes loading {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(0%); }
+  100% { transform: translateX(100%); }
+}
+
+.animate-pulse-neon {
+  animation: pulse-neon 2s infinite ease-in-out;
+}
+
+:root {
+  --neon-violet: #8b5cf6;
+  --neon-pink: #db2777;
+  --neon-emerald: #10b981;
+  --terminal-bg: #020617;
+}
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #f8fafc;
+  color: #1e293b;
+  overflow-x: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+.dark body {
+  background-color: var(--terminal-bg);
+  color: #f1f5f9;
+}
+
+.font-mono {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Cyberpunk Scanline Effect - Only visible in dark mode */
+.dark .scanlines::before {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 255, 0, 0.06));
+  z-index: 100;
+  background-size: 100% 2px, 3px 100%;
+  pointer-events: none;
+  opacity: 0.15;
+}
+
+.neon-glow {
+  box-shadow: 0 0 15px rgba(139, 92, 246, 0.3);
+}
+
+.neon-border {
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  position: relative;
+}
+
+.dark .neon-border {
+  border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+.neon-border::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(45deg, var(--neon-violet), transparent, var(--neon-pink), transparent);
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0.3;
+}
+
+.dark .neon-border::after {
+  opacity: 0.5;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dark ::-webkit-scrollbar-track {
+  background: #020617;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 10px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #1e293b;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #8b5cf6;
+}
+
+/* Glassmorphism */
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.dark .glass {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}

@@ -1,206 +1,155 @@
+import { Trade, User, SubscriptionTier, ChartAnalysisResult, TradeAuditResult } from "@/types";
+import { auth } from "./firebase";
+import { billingService } from "./billingService";
 
-import { GoogleGenAI, Type } from "@google/genai";
-import { Trade, TradeType } from "../types";
-
-// Always use process.env.API_KEY directly for initialization as per guidelines
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
-
-export const getMarketNews = async (query: string = "Forex market sentiment today major pairs") => {
-  const ai = getAI();
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `
-      Analyze current market sentiment and news for: ${query}. 
-      Focus on providing high-impact macro trends, central bank comments, and key technical support/resistance levels.
-      Keep the output professional, concise, and formatted for a professional trading dashboard. 
-      Bullet points are preferred for technical levels.
-    `,
-    config: {
-      tools: [{ googleSearch: {} }],
-    },
-  });
-
-  const text = response.text || "Unable to fetch news.";
-  const sources = response.candidates?.[0]?.groundingMetadata?.groundingChunks?.map((chunk: any) => ({
-    title: chunk.web?.title || "Source",
-    uri: chunk.web?.uri || "#"
-  })) || [];
-
-  return { text, sources };
-};
-
-export const generateEmailReport = async (email: string, trades: Trade[], stats: any) => {
-  const ai = getAI();
-  const tradeSummary = trades.slice(0, 10).map(t => 
-    `${t.pair} (${t.type}): ${t.status} | PnL: $${t.pnl.toFixed(2)}`
-  ).join('\n');
-
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `
-      Generate a professional "Weekly Trading Performance Report" for a user with the email ${email}.
-      
-      STATS:
-      - Total Trades: ${stats.total}
-      - Win Rate: ${stats.winRate}%
-      - Total PnL: $${stats.totalPnl}
-      
-      RECENT TRADES:
-      ${tradeSummary}
-      
-      Format the response as a clear, encouraging, and professional email body. 
-      Include a section on 'Strategic Advice' based on the win rate and PnL.
-      Do not include the 'Subject:' line in the text, just the body.
-    `,
-    config: {
-      temperature: 0.7,
+/**
+ * Clean client-side service layer communicating with the secure server-side AI Gateway.
+ * All Gemini API calls, GEMINI_API_KEY secrets, and model routing reside exclusively on the server.
+ * Authentication tokens are attached to every request.
+ * Quotas and subscription entitlements are enforced server-side.
+ */
+class AIGateway {
+  private async getAuthHeaders(): Promise<HeadersInit> {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      throw new Error("Authentication required to access terminal intelligence. Please initialize session.");
     }
-  });
-
-  return response.text || "Report generation failed.";
-};
-
-export const getHistoricalContext = async (pair: string, date: string) => {
-  const ai = getAI();
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `What were the key technical levels, high/low prices, and major economic news for ${pair} on ${date}? Provide a concise technical summary for a trader wanting to backtest that day.`,
-    config: {
-      tools: [{ googleSearch: {} }],
-    },
-  });
-
-  return response.text || "Historical context unavailable.";
-};
-
-export const simulateBacktestResult = async (params: {
-  pair: string;
-  date: string;
-  type: TradeType;
-  entry: number;
-  sl: number;
-  tp: number;
-  context: string;
-}) => {
-  const ai = getAI();
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `
-      Act as a rigorous Backtest Simulator.
-      Scenario Context: ${params.context}
-      Trade Details:
-      Pair: ${params.pair} on ${params.date}
-      Direction: ${params.type}
-      Entry: ${params.entry}
-      Stop Loss: ${params.sl}
-      Take Profit: ${params.tp}
-
-      Using the known historical price action of that day, determine the outcome:
-      1. Did price hit TP first, SL first, or neither (closed at EOD)?
-      2. Provide a 2-sentence play-by-play of the price movement.
-      
-      Response Format (Strict JSON):
-      {
-        "outcome": "WIN" | "LOSS" | "BE",
-        "playByPlay": "string",
-        "realizedPrice": number
-      }
-    `,
-    config: {
-      responseMimeType: "application/json",
-    }
-  });
-
-  try {
-    return JSON.parse(response.text || '{}');
-  } catch (e) {
-    return { outcome: 'BE', playByPlay: 'Simulation failed to parse.', realizedPrice: params.entry };
+    const token = await currentUser.getIdToken();
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    };
   }
-};
 
-export const analyzeIndividualTrade = async (trade: Trade) => {
-  const ai = getAI();
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `
-      Act as a high-performance Forex Performance Coach. Analyze this specific trade and provide actionable advice on improving risk management or strategy adherence:
-      Pair: ${trade.pair}
-      Type: ${trade.type}
-      Entry: ${trade.entryPrice}
-      Exit: ${trade.exitPrice}
-      Lot Size: ${trade.lotSize}
-      PnL: ${trade.pnl}
-      Notes: ${trade.notes || 'No notes provided'}
+  private async postJson<T>(url: string, body: unknown): Promise<T> {
+    const headers = await this.getAuthHeaders();
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body)
+    });
 
-      Evaluate if the risk/reward or the logic in the notes sounds professional. 
-      Specifically point out:
-      1. One risk management adjustment.
-      2. One strategic adherence critique.
-      Keep it professional and concise.
-    `,
-    config: {
-      temperature: 0.7,
-      maxOutputTokens: 300,
+    if (!response.ok) {
+      let errorMessage = `Server error (${response.status})`;
+      try {
+        const errorData = await response.json();
+        if (errorData?.error) errorMessage = errorData.error;
+      } catch {
+        // Fallback to status text
+      }
+      throw new Error(errorMessage);
     }
-  });
 
-  return response.text || "Analysis unavailable.";
-};
+    return response.json() as Promise<T>;
+  }
 
-export const analyzeTradesDeeply = async (trades: Trade[]) => {
-  const ai = getAI();
-  const tradeData = trades.map(t => 
-    `Pair: ${t.pair}, Type: ${t.type}, PnL: ${t.pnl}, Result: ${t.status}, Note: ${t.notes || 'N/A'}`
-  ).join('\n');
+  async verifyPayment(sessionId: string, tier: SubscriptionTier, user?: User): Promise<User> {
+    if (!auth.currentUser) {
+      throw new Error("Authentication required to upgrade plan.");
+    }
+    const baseUser: User = user || {
+      id: auth.currentUser.uid,
+      userId: auth.currentUser.uid,
+      username: auth.currentUser.displayName || 'TRADER',
+      balance: 100000,
+      tier: SubscriptionTier.FREE,
+      usageCount: { vision: 0, audit: 0 }
+    };
+    return billingService.activateTier(baseUser, tier, sessionId);
+  }
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
-    contents: `
-      Analyze the following Forex trading journal and provide a deep strategic review. 
-      Identify psychological patterns, risk management flaws, and winning streaks. 
-      Suggest specific improvements to the trading strategy.
+  // --- AI Server-Side Proxied Calls with Authoritative Enforcement ---
 
-      TRADING DATA:
-      ${tradeData}
-    `,
-    config: {
-      thinkingConfig: { thinkingBudget: 32768 }
-    },
-  });
+  /**
+   * 1. Market/News Intelligence Briefing
+   * Routed to gemini-3.6-flash with Google Search Grounding
+   */
+  async fetchMarketNews(query = "Global market sentiment"): Promise<{ text: string; sources: { title: string; uri: string }[]; modelUsed?: string }> {
+    try {
+      return await this.postJson<{ text: string; sources: { title: string; uri: string }[]; modelUsed?: string }>('/api/ai/news', { query });
+    } catch (e: any) {
+      const msg = e?.message || "";
+      if (msg.includes("rate limit") || msg.includes("429") || msg.includes("quota")) {
+        return {
+          text: `Market Briefing (${query}):\n\nCentral bank policies and macroeconomic data continue to drive market sentiment. Major currency pairs are consolidating near key support and resistance zones. Traders are advised to monitor high-impact economic releases and adhere strictly to risk management guidelines.\n\n(Note: Live search quota temporarily reached. Displaying baseline market outlook.)`,
+          sources: []
+        };
+      }
+      throw new Error(msg || "Failed to load market intelligence.");
+    }
+  }
 
-  return response.text || "Analysis could not be generated.";
-};
+  /**
+   * Performance Report Generation
+   */
+  async generateReport(username: string, _trades: Trade[], stats: { winRate: number; totalPnl: number }): Promise<string> {
+    try {
+      const res = await this.postJson<{ text: string }>('/api/ai/report', { username, stats });
+      return res.text || "Failed to generate report.";
+    } catch (e: any) {
+      throw new Error(e?.message || "Report generation failed.");
+    }
+  }
 
-export const analyzeTradeChart = async (imageBase64: string, mimeType: string) => {
-  const ai = getAI();
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
-    contents: {
-      parts: [
-        {
-          inlineData: {
-            data: imageBase64,
-            mimeType: mimeType,
-          },
-        },
-        {
-          text: "Analyze this Forex trading chart image. Identify the market structure (trend), key technical levels (support, resistance, supply/demand zones), and any visible candle patterns. Provide a professional assessment and suggest a potential trade setup or caution based on the visual data. Point out specific chart flaws or strengths.",
-        },
-      ],
-    },
-  });
-  return response.text || "Chart analysis failed.";
-};
+  /**
+   * 2. Single Trade Audit
+   * Routed to gemini-3.6-flash with Structured Output schema
+   */
+  async auditTrade(trade: Trade): Promise<TradeAuditResult & { usageCount?: { vision: number; audit: number }; tier?: SubscriptionTier }> {
+    try {
+      return await this.postJson<TradeAuditResult & { usageCount?: { vision: number; audit: number }; tier?: SubscriptionTier }>('/api/ai/audit', { trade });
+    } catch (e: any) {
+      throw new Error(e?.message || "Trade audit failed.");
+    }
+  }
 
-export const getChatResponse = async (history: { role: string; text: string }[], message: string) => {
-  const ai = getAI();
-  const chat = ai.chats.create({
-    model: 'gemini-3-pro-preview',
-    config: {
-      systemInstruction: 'You are an expert Forex trading mentor named Alpha. You provide professional, data-driven advice on technical analysis, risk management, and trading psychology. Keep responses concise and insightful.',
-    },
-  });
+  /**
+   * 3. Deep Trade Analysis
+   * Routed to gemini-3.1-pro-preview with ThinkingLevel.HIGH
+   */
+  async deepAudit(trades: Trade[]): Promise<TradeAuditResult & { modelUsed?: string; thinkingApplied?: boolean }> {
+    try {
+      return await this.postJson<TradeAuditResult & { modelUsed?: string; thinkingApplied?: boolean }>('/api/ai/deep-audit', { trades });
+    } catch (e: any) {
+      throw new Error(e?.message || "Deep audit failed.");
+    }
+  }
 
-  const response = await chat.sendMessage({ message });
-  return response.text;
-};
+  /**
+   * 4. Alpha Vision Chart Analysis
+   * Routed to gemini-3.6-flash with Structured Output schema
+   */
+  async analyzeChart(imageBase64: string, mimeType: string): Promise<ChartAnalysisResult & { modelUsed?: string }> {
+    try {
+      return await this.postJson<ChartAnalysisResult & { modelUsed?: string }>('/api/ai/vision', { imageBase64, mimeType });
+    } catch (e: any) {
+      throw new Error(e?.message || "Chart analysis failed.");
+    }
+  }
+
+  /**
+   * 5. General Chat
+   * Routed to gemini-3.1-pro-preview when thinkingMode is true, gemini-3.6-flash otherwise
+   */
+  async chat(
+    history: { role: 'user' | 'model'; parts: { text: string }[] }[],
+    thinkingMode = false
+  ): Promise<{ text: string; modelUsed?: string; thinkingApplied?: boolean }> {
+    try {
+      return await this.postJson<{ text: string; modelUsed?: string; thinkingApplied?: boolean }>('/api/ai/chat', {
+        history,
+        thinkingMode
+      });
+    } catch (e: any) {
+      throw new Error(e?.message || "Chat service temporarily unavailable.");
+    }
+  }
+}
+
+export const Gateway = new AIGateway();
+export const getMarketNews = (q?: string) => Gateway.fetchMarketNews(q);
+export const generateEmailReport = (e: string, t: Trade[], s: any) => Gateway.generateReport(e, t, s);
+export const analyzeIndividualTrade = (t: Trade) => Gateway.auditTrade(t);
+export const analyzeTradeChart = (i: string, m: string) => Gateway.analyzeChart(i, m);
+export const analyzeTradesDeeply = (t: Trade[]) => Gateway.deepAudit(t);
+export const getChatResponse = (h: any[], thinking = false) => Gateway.chat(h, thinking);
