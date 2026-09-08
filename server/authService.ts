@@ -38,8 +38,11 @@ export async function verifyAuthToken(authHeader?: string): Promise<{ user: Auth
     throw new Error('Authentication required. Empty token provided.');
   }
 
-  // Support test tokens in automated test environments
+  // Support test tokens ONLY in automated test environments
   if (token.startsWith('mock-test-token-')) {
+    if (process.env.NODE_ENV !== 'test') {
+      throw new Error('Authentication required. Invalid token.');
+    }
     const parts = token.split('-');
     // Format: mock-test-token-<tier>-<uid>
     const tier = (parts[3]?.toUpperCase() as SubscriptionTier) || SubscriptionTier.FREE;
@@ -111,7 +114,7 @@ export async function verifyAuthToken(authHeader?: string): Promise<{ user: Auth
  * Never trusts client-reported tier, usageCount, or subscriptionExpiry.
  */
 export async function getAuthoritativeSubscription(uid: string, idToken: string): Promise<UserSubscription> {
-  if (idToken.startsWith('mock-test-token-')) {
+  if (idToken.startsWith('mock-test-token-') && process.env.NODE_ENV === 'test') {
     let sub = testSubscriptions.get(uid);
     if (!sub) {
       const parts = idToken.split('-');
@@ -292,7 +295,7 @@ export async function recordServerUsage(
   const now = new Date().toISOString();
 
   // Test mode update
-  if (idToken.startsWith('mock-test-token-')) {
+  if (idToken.startsWith('mock-test-token-') && process.env.NODE_ENV === 'test') {
     const updatedSub: UserSubscription = {
       ...currentSub,
       usageCount: { vision: newVision, audit: newAudit },

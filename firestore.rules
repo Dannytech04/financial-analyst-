@@ -31,9 +31,9 @@ service cloud.firestore {
 
     // --- User Profile Validation (/users/{userId}) ---
     // Allowed keys: userId, username, displayName, email, balance, createdAt, updatedAt
-    // Client-editable: username, displayName, email, balance, updatedAt
+    // Client-editable: username, displayName, email, updatedAt
     // Immutable: userId, createdAt
-    // Server-controlled: tier, usageCount, subscriptionExpiry have been moved to /users/{userId}/subscription/current
+    // Server-controlled: balance, tier, usageCount, subscriptionExpiry
     function isValidUserProfile(data, userId) {
       return data.keys().hasAll(['userId', 'username']) &&
              ['userId', 'username', 'displayName', 'email', 'balance', 'createdAt', 'updatedAt'].hasAll(data.keys()) &&
@@ -114,13 +114,14 @@ service cloud.firestore {
                        isValidId(userId) && 
                        isValidUserProfile(incoming(), userId);
 
-      // Profile update: cannot modify immutable userId or createdAt, no ghost fields
+      // Profile update: cannot modify immutable userId, createdAt, or server-controlled balance
       allow update: if isOwner(userId) && 
                        isValidId(userId) && 
                        isValidUserProfile(incoming(), userId) &&
                        incoming().userId == existing().userId &&
                        (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt) &&
-                       incoming().diff(existing()).affectedKeys().hasOnly(['username', 'displayName', 'email', 'balance', 'updatedAt', 'createdAt']);
+                       (!('balance' in existing()) || incoming().balance == existing().balance) &&
+                       incoming().diff(existing()).affectedKeys().hasOnly(['username', 'displayName', 'email', 'updatedAt', 'createdAt']);
 
       allow delete: if false; // Deletion of user profile via client SDK is forbidden
 
@@ -186,19 +187,19 @@ service cloud.firestore {
         // Client update: 
         // 1. Cannot change tier (server controlled)
         // 2. Cannot change subscriptionExpiry (server controlled)
-        // 3. Cannot decrease usageCount (prevent extra AI usage exploit)
+        // 3. Cannot change usageCount (server controlled - atomic increments only)
         // 4. Cannot change userId
-        // 5. Only usageCount and updatedAt are client-writable
+        // 5. Only updatedAt is client-writable
         allow update: if isOwner(userId) && 
                          subDoc == 'current' && 
                          isValidSubscription(incoming(), userId) &&
                          incoming().userId == existing().userId &&
                          incoming().tier == existing().tier &&
                          ((!('subscriptionExpiry' in existing()) && !('subscriptionExpiry' in incoming())) || incoming().subscriptionExpiry == existing().subscriptionExpiry) &&
-                         incoming().usageCount.vision >= existing().usageCount.vision &&
-                         incoming().usageCount.audit >= existing().usageCount.audit &&
+                         incoming().usageCount.vision == existing().usageCount.vision &&
+                         incoming().usageCount.audit == existing().usageCount.audit &&
                          (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt) &&
-                         incoming().diff(existing()).affectedKeys().hasOnly(['usageCount', 'updatedAt']);
+                         incoming().diff(existing()).affectedKeys().hasOnly(['updatedAt']);
 
         allow delete: if false;
       }

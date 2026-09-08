@@ -168,7 +168,7 @@ async function runTests() {
 
   // --- Category 6: Spoofed Usage Counters ---
   console.log('\n--- Category 6: Spoofed Usage Counters ---');
-  await expectAllowed('Usage', 'Legitimate usage increment (0 -> 1)', () => updateDoc(doc(userADb, 'users', 'userA', 'subscription', 'current'), {
+  await expectDenied('Spoofed Usage', 'Client cannot modify usageCount (server-controlled atomic increments only)', () => updateDoc(doc(userADb, 'users', 'userA', 'subscription', 'current'), {
     usageCount: { vision: 1, audit: 0 },
     updatedAt: new Date().toISOString()
   }));
@@ -215,6 +215,9 @@ async function runTests() {
   }));
   await expectDenied('Data Types', 'String passed for numeric balance', () => updateDoc(doc(userADb, 'users', 'userA'), {
     balance: '100000'
+  }));
+  await expectDenied('Server-Controlled', 'Client cannot modify account balance (server-controlled)', () => updateDoc(doc(userADb, 'users', 'userA'), {
+    balance: 500000
   }));
 
   // --- Category 9: Invalid Enum Values ---

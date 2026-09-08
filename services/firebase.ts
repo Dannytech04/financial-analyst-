@@ -222,7 +222,6 @@ export async function syncUserProfile(userId: string, updates: Partial<UserProfi
     if (updates.username !== undefined) allowedUpdates.username = updates.username;
     if (updates.displayName !== undefined) allowedUpdates.displayName = updates.displayName;
     if (updates.email !== undefined) allowedUpdates.email = updates.email;
-    if (typeof updates.balance === 'number') allowedUpdates.balance = updates.balance;
 
     await updateDoc(doc(db, 'users', userId), allowedUpdates);
   } catch (error) {
@@ -316,26 +315,6 @@ export function subscribeToUserSubscription(userId: string, callback: (sub: User
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.GET, path);
-  }
-}
-
-export async function incrementAiUsage(userId: string, feature: 'vision' | 'audit'): Promise<void> {
-  const path = `users/${userId}/subscription/current`;
-  try {
-    const sub = await getUserSubscription(userId);
-    const currentCount = sub?.usageCount?.[feature] ?? 0;
-    const currentVision = sub?.usageCount?.vision ?? 0;
-    const currentAudit = sub?.usageCount?.audit ?? 0;
-
-    await updateDoc(doc(db, 'users', userId, 'subscription', 'current'), {
-      usageCount: {
-        vision: feature === 'vision' ? currentVision + 1 : currentVision,
-        audit: feature === 'audit' ? currentAudit + 1 : currentAudit
-      },
-      updatedAt: new Date().toISOString()
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
 
