@@ -111,6 +111,9 @@ const BacktestSimulator: React.FC<BacktestSimulatorProps> = () => {
           <div>
             <h3 className="text-2xl font-black uppercase tracking-tighter mb-1">Strategy Lab</h3>
             <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] opacity-80">Monte Carlo Simulation & Risk Intelligence</p>
+            <p className="mt-3 text-[10px] text-slate-500 italic leading-relaxed max-w-md">
+              Educational projection only. Results are randomly generated from your assumed win rate and R:R — they do not use real market data and are not a prediction of future performance.
+            </p>
           </div>
           <button 
             onClick={runSimulation}
@@ -231,6 +234,9 @@ const BacktestSimulator: React.FC<BacktestSimulatorProps> = () => {
                   {simulation.expectancy > 0 
                     ? `Positive expectancy detected. This strategy models a sustainable long-term edge with a profit factor of ${simulation.profitFactor.toFixed(2)}.`
                     : "Negative expectancy modeled. Continuing this strategy without refinement may lead to terminal capital depletion."}
+                </p>
+                <p className="mt-3 text-[9px] text-slate-400 dark:text-slate-600 leading-relaxed">
+                  Simulated from assumed parameters, not historical data. Past performance does not guarantee future results.
                 </p>
               </div>
             </div>

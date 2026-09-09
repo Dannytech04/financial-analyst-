@@ -39,6 +39,9 @@ export const StrategicAuditView: React.FC<StrategicAuditViewProps> = ({ user, tr
             <p className="text-slate-500 dark:text-slate-400 font-medium text-sm tracking-tight leading-relaxed max-w-xl opacity-80">
               Analyze your trade history using deep reasoning heuristics to discover recurring psychological patterns, execution leakage, and statistical edge.
             </p>
+            <p className="mt-4 text-[10px] font-bold uppercase tracking-widest text-slate-400">
+              {user.tier} plan · Audit usage: {auditUsed}/{auditLimit === Infinity ? 'Unlimited' : auditLimit}
+            </p>
           </div>
           <button 
             onClick={async () => {

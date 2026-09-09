@@ -3,6 +3,18 @@ import { NavLink } from 'react-router-dom';
 import { User, Toast, Trade } from '@/types';
 import ChatBot from './ChatBot';
 
+interface LayoutProps {
+  user: User;
+  toasts: Toast[];
+  setToasts: React.Dispatch<React.SetStateAction<Toast[]>>;
+  trades: Trade[];
+  addToast: (msg: string, type: Toast['type']) => void;
+  isDarkMode: boolean;
+  toggleDarkMode: () => void;
+  onLogout?: () => void;
+  children: React.ReactNode;
+}
+
 export const LogoMark: React.FC<{ className?: string }> = ({ className = "w-10 h-10" }) => (
   <div className={`${className} relative flex items-center justify-center`}>
     <svg viewBox="0 0 100 100" className="w-full h-full drop-shadow-[0_0_8px_rgba(139,92,246,0.6)]">
@@ -19,18 +31,6 @@ export const LogoMark: React.FC<{ className?: string }> = ({ className = "w-10 h
     </svg>
   </div>
 );
-
-interface LayoutProps {
-  user: User;
-  toasts: Toast[];
-  setToasts: React.Dispatch<React.SetStateAction<Toast[]>>;
-  trades: Trade[];
-  addToast: (msg: string, type: Toast['type']) => void;
-  isDarkMode: boolean;
-  toggleDarkMode: () => void;
-  onLogout?: () => void;
-  children: React.ReactNode;
-}
 
 export const Layout: React.FC<LayoutProps> = ({ 
   user, 
@@ -189,7 +189,7 @@ export const Layout: React.FC<LayoutProps> = ({
         </div>
       </nav>
 
-      <ChatBot />
+      <ChatBot user={user} />
     </div>
   );
 };
