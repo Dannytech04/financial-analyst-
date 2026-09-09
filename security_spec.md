@@ -5,7 +5,7 @@ Persistent financial data is authoritative ONLY within Firestore. The browser's 
 
 ### Document Hierarchy & Scope
 1. **User Profile**: `/users/{userId}`
-   - *Client-Editable Fields*: `username`, `displayName`, `email`, `balance`, `updatedAt`
+   - *Client-Editable Fields*: `username`, `displayName`, `email`, `updatedAt`
    - *Immutable Fields*: `userId`, `createdAt`
    - *Disallowed Fields*: `tier`, `usageCount`, `subscriptionExpiry` (migrated to subscription subcollection to prevent client privilege escalation)
 2. **Trade Records**: `/users/{userId}/trades/{tradeId}`
@@ -18,7 +18,7 @@ Persistent financial data is authoritative ONLY within Firestore. The browser's 
    - *Immutable Fields*: `userId`, `createdAt`
 4. **User Subscription & Usage**: `/users/{userId}/subscription/current`
    - Fixed document ID: `current`
-   - *Server-Controlled Protected Fields*: `tier`, `subscriptionExpiry`, `userId`
+   - *Server-Controlled Protected Fields*: `tier`, `subscriptionExpiry`, `userId`, `balance`
    - *Monotonic Fields*: `usageCount.vision`, `usageCount.audit` (client can only increment, never decrease)
    - *Initial Creation*: Only `tier: 'FREE'` and initial zeroed counters `{ vision: 0, audit: 0 }` allowed.
 

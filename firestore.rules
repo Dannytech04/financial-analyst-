@@ -33,7 +33,7 @@ service cloud.firestore {
     // Allowed keys: userId, username, displayName, email, balance, createdAt, updatedAt
     // Client-editable: username, displayName, email, updatedAt
     // Immutable: userId, createdAt
-    // Server-controlled: balance, tier, usageCount, subscriptionExpiry
+    // Server-controlled after initialization: balance, tier, usageCount, subscriptionExpiry
     function isValidUserProfile(data, userId) {
       return data.keys().hasAll(['userId', 'username']) &&
              ['userId', 'username', 'displayName', 'email', 'balance', 'createdAt', 'updatedAt'].hasAll(data.keys()) &&
@@ -112,7 +112,8 @@ service cloud.firestore {
       // Profile creation: can only set allowed client profile fields
       allow create: if isOwner(userId) && 
                        isValidId(userId) && 
-                       isValidUserProfile(incoming(), userId);
+                       isValidUserProfile(incoming(), userId) &&
+                       incoming().balance == 100000;
 
       // Profile update: cannot modify immutable userId, createdAt, or server-controlled balance
       allow update: if isOwner(userId) && 

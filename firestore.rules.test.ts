@@ -80,6 +80,16 @@ async function runTests() {
     updatedAt: new Date().toISOString()
   }));
 
+  await expectDenied('Server-Controlled', 'New user cannot choose an arbitrary starting balance', () => setDoc(doc(userBDb, 'users', 'userB'), {
+    userId: 'userB',
+    username: 'BetaTrader',
+    displayName: 'Beta Trader',
+    email: 'beta@trader.io',
+    balance: 500000,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  }));
+
   await expectAllowed('Setup', 'User A creates valid initial FREE subscription', () => setDoc(doc(userADb, 'users', 'userA', 'subscription', 'current'), {
     userId: 'userA',
     tier: 'FREE',
