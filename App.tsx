@@ -188,7 +188,6 @@ const App: React.FC = () => {
 
     try {
       await saveTradeToFirestore(user.id, tradeWithMeta);
-      setTrades(prev => [tradeWithMeta, ...prev]);
       addToast('Trade saved. AI analysis is running.', 'success');
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : 'Trade could not be saved.';
