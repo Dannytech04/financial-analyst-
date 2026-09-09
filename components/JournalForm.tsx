@@ -10,7 +10,7 @@ import {
 } from '@/services/financialEngine';
 
 interface JournalFormProps {
-  onAddTrade: (trade: Trade) => void;
+  onAddTrade: (trade: Trade) => Promise<void>;
 }
 
 interface ValidationErrors {
@@ -58,7 +58,9 @@ const JournalForm: React.FC<JournalFormProps> = ({ onAddTrade }) => {
       try {
         const stopDistance = pips * spec.pipSize;
         const refEntry = parseFloat(entry) > 0 ? parseFloat(entry) : 100.0;
-        const refStopLoss = refEntry - stopDistance;
+        const refStopLoss = type === TradeType.BUY
+          ? refEntry - stopDistance
+          : refEntry + stopDistance;
 
         const result = financialEngine.calculatePositionSize({
           symbol: spec.symbol,
@@ -118,7 +120,9 @@ const JournalForm: React.FC<JournalFormProps> = ({ onAddTrade }) => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent): void => {
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     if (!validate()) return;
 
@@ -154,11 +158,19 @@ const JournalForm: React.FC<JournalFormProps> = ({ onAddTrade }) => {
         riskPercent: parseFloat(riskPercent) || 1
       };
 
-      onAddTrade(newTrade);
-      setEntry(''); 
-      setExit(''); 
-      setNotes('');
-      setErrors({});
+      setIsSaving(true);
+      try {
+        await onAddTrade(newTrade);
+        setEntry('');
+        setExit('');
+        setNotes('');
+        setErrors({});
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : 'Trade could not be saved.';
+        setErrors(prev => ({ ...prev, general: errMsg }));
+      } finally {
+        setIsSaving(false);
+      }
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : 'Calculation error occurred';
       setErrors(prev => ({ ...prev, general: errMsg }));
@@ -318,8 +330,8 @@ const JournalForm: React.FC<JournalFormProps> = ({ onAddTrade }) => {
           </div>
 
           <div className="md:col-span-4 mt-4">
-            <button type="submit" className="w-full bg-white text-slate-950 py-5 rounded-[2rem] font-black text-[11px] uppercase tracking-[0.6em] hover:scale-[1.01] active:scale-[0.98] transition-all shadow-2xl hover:neon-glow group flex items-center justify-center gap-4">
-              Save Trade
+            <button type="submit" disabled={isSaving} className="w-full bg-white text-slate-950 py-5 rounded-[2rem] font-black text-[11px] uppercase tracking-[0.6em] hover:scale-[1.01] active:scale-[0.98] transition-all shadow-2xl hover:neon-glow group flex items-center justify-center gap-4 disabled:opacity-60 disabled:cursor-wait">
+              {isSaving ? 'Saving Trade...' : 'Save Trade'}
               <svg className="w-4 h-4 transition-transform group-hover:translate-x-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>
             </button>
           </div>

@@ -11,7 +11,9 @@ interface StrategicAuditViewProps {
   setUser?: (user: User) => void;
 }
 
-export const StrategicAuditView: React.FC<StrategicAuditViewProps> = ({ trades, isTierPro, addToast }) => {
+export const StrategicAuditView: React.FC<StrategicAuditViewProps> = ({ user, trades, isTierPro, addToast }) => {
+  const auditLimit = user.tier === 'ELITE' ? Infinity : user.tier === 'PRO' ? 20 : 2;
+  const auditUsed = user.usageCount?.audit ?? 0;
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [auditResult, setAuditResult] = useState<TradeAuditResult | string | null>(null);
 

@@ -185,10 +185,16 @@ const App: React.FC = () => {
   const handleAddTrade = async (trade: Trade): Promise<void> => {
     if (!trade || !trade.id || !user?.id) return;
     const tradeWithMeta: Trade = { ...trade, userId: user.id, isAnalyzing: true };
-    setTrades(prev => [tradeWithMeta, ...prev]);
 
-    // Save to Firestore under user UID subcollection
-    saveTradeToFirestore(user.id, tradeWithMeta).catch(err => console.error("Firestore trade save failed:", err));
+    try {
+      await saveTradeToFirestore(user.id, tradeWithMeta);
+      setTrades(prev => [tradeWithMeta, ...prev]);
+      addToast('Trade saved. AI analysis is running.', 'success');
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Trade could not be saved.';
+      addToast(message, 'error');
+      return;
+    }
 
     const msg = trade.status === TradeStatus.WIN 
       ? `Trade Won: +$${(trade.pnl || 0).toFixed(2)}` 
@@ -204,15 +210,31 @@ const App: React.FC = () => {
         : `${auditRes.summary || ''}\nStrengths: ${auditRes.strengths?.join('; ') || 'None'}\nImprovements: ${auditRes.improvementAreas?.join('; ') || 'None'}`;
       const updatedTrade = { ...tradeWithMeta, aiFeedback: feedbackText || "Analysis incomplete.", isAnalyzing: false };
       setTrades(prev => prev.map(t => t.id === trade.id ? updatedTrade : t));
-      saveTradeToFirestore(user.id, updatedTrade).catch(err => console.error("Firestore trade update failed:", err));
+      try {
+        await saveTradeToFirestore(user.id, updatedTrade);
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'AI result could not be saved.';
+        addToast(message, 'error');
+      }
       if (auditRes.usageCount) {
         const newUsage = auditRes.usageCount;
         setUser(prev => prev ? { ...prev, usageCount: newUsage } : prev);
       }
     } catch (e: unknown) {
       const error = e as Error;
-      setTrades(prev => prev.map(t => t.id === trade.id ? { ...t, isAnalyzing: false, aiFeedback: "Analysis unavailable." } : t));
-      addToast(error.message, 'warning');
+      const failedTrade: Trade = {
+        ...tradeWithMeta,
+        isAnalyzing: false,
+        aiFeedback: `Analysis unavailable: ${error.message || 'The AI service did not respond.'}`
+      };
+      setTrades(prev => prev.map(t => t.id === trade.id ? failedTrade : t));
+      try {
+        await saveTradeToFirestore(user.id, failedTrade);
+      } catch (saveError: unknown) {
+        const message = saveError instanceof Error ? saveError.message : 'The failed analysis status could not be saved.';
+        addToast(message, 'error');
+      }
+      addToast(error.message || 'Trade saved, but AI analysis was unavailable.', 'warning');
     }
   };
 
@@ -263,7 +285,7 @@ const App: React.FC = () => {
         <Routes>
           <Route path="/" element={<Dashboard trades={trades} layout={layout} goals={goals} />} />
           <Route path="/journal" element={<JournalView trades={trades} onAddTrade={handleAddTrade} />} />
-          <Route path="/vision" element={<ChartAnalyzer />} />
+          <Route path="/vision" element={<ChartAnalyzer user={user} />} />
           <Route path="/simulator" element={
             <div className="relative">
               {!isTierPro && (

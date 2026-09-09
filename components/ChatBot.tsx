@@ -1,9 +1,13 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Gateway } from '@/services/geminiService';
-import { ChatMessage } from '@/types';
+import { ChatMessage, SubscriptionTier, User } from '@/types';
 
-const ChatBot: React.FC = () => {
+interface ChatBotProps {
+  user: User;
+}
+
+const ChatBot: React.FC<ChatBotProps> = ({ user }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -63,7 +67,7 @@ const ChatBot: React.FC = () => {
                 <div className="flex items-center gap-1">
                   <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${thinkingMode ? 'bg-amber-500' : 'bg-violet-500'}`}></span>
                   <span className="text-[10px] text-slate-500 dark:text-slate-400">
-                    {thinkingMode ? 'Deep Intelligence' : 'Synced'}
+                    {thinkingMode ? 'Deep Intelligence' : `${user.tier} plan · Synced`}
                   </span>
                 </div>
               </div>

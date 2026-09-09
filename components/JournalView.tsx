@@ -4,7 +4,7 @@ import JournalForm from './JournalForm';
 
 interface JournalViewProps {
   trades: Trade[];
-  onAddTrade: (t: Trade) => void;
+  onAddTrade: (t: Trade) => Promise<void>;
 }
 
 export const JournalView: React.FC<JournalViewProps> = ({ trades, onAddTrade }) => {
@@ -18,7 +18,10 @@ export const JournalView: React.FC<JournalViewProps> = ({ trades, onAddTrade }) 
         <div className="xl:col-span-12">
           <div className="neon-border rounded-[2.5rem] bg-white dark:bg-slate-900/40 glass overflow-hidden shadow-sm">
             <div className="px-8 py-6 border-b border-slate-200 dark:border-white/5 flex justify-between items-center bg-slate-50 dark:bg-white/5">
-              <h3 className="text-lg font-black uppercase tracking-tighter italic text-slate-800 dark:text-white">Trade History</h3>
+              <div>
+                <h3 className="text-lg font-black uppercase tracking-tighter italic text-slate-800 dark:text-white">Trade History</h3>
+                <p className="text-[9px] font-bold uppercase tracking-widest text-slate-400 mt-1">Self-reported entries · Not broker-verified</p>
+              </div>
               <div className="flex items-center gap-4">
                 <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest">Entries: {trades.length}</span>
                 <div className="h-4 w-px bg-slate-200 dark:bg-white/10"></div>

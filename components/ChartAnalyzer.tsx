@@ -1,8 +1,14 @@
 import React, { useState, useRef } from 'react';
 import { analyzeTradeChart } from '@/services/geminiService';
-import { ChartAnalysisResult } from '@/types';
+import { ChartAnalysisResult, SubscriptionTier, User } from '@/types';
 
-const ChartAnalyzer: React.FC = () => {
+interface ChartAnalyzerProps {
+  user: User;
+}
+
+const ChartAnalyzer: React.FC<ChartAnalyzerProps> = ({ user }) => {
+  const visionLimit = user.tier === SubscriptionTier.ELITE ? Infinity : user.tier === SubscriptionTier.PRO ? 50 : 3;
+  const visionUsed = user.usageCount?.vision ?? 0;
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [mimeType, setMimeType] = useState<string>('');
   const [analysis, setAnalysis] = useState<ChartAnalysisResult | string | null>(null);
@@ -73,6 +79,9 @@ const ChartAnalyzer: React.FC = () => {
           </h3>
           <p className="opacity-60 text-[10px] font-black uppercase tracking-[0.3em]">
             Institutional Computer Vision Uplink Active (Gemini 3.6 Flash)
+          </p>
+          <p className="mt-3 text-[10px] font-bold uppercase tracking-widest text-violet-200">
+            {user.tier} plan · Vision usage: {visionUsed}/{visionLimit === Infinity ? 'Unlimited' : visionLimit}
           </p>
         </div>
         <button 
