@@ -15,6 +15,8 @@ import {
   chatAssistant,
   GEMINI_MODELS,
 } from './server/geminiGateway';
+import { initializePayment, activateSubscriptionFromPayment, cancelSubscription } from './server/paymentService';
+import { verifyWebhookSignature } from './server/paystackService';
 
 const app = express();
 const PORT = 3000;
@@ -234,6 +236,100 @@ app.post('/api/ai/report', async (req: Request, res: Response) => {
     return res.json({ text: summary.text, modelUsed: summary.modelUsed });
   } catch (error) {
     return handleServerError(res, error, 'GenerateReport');
+  }
+});
+
+// --- Payment Routes (Paystack) ---
+
+// Initialize a Paystack transaction for subscription upgrade
+app.post('/api/payment/initialize', async (req: Request, res: Response) => {
+  try {
+    const { user } = await verifyAuthToken(req.headers.authorization);
+    const { tier, cycle } = req.body;
+
+    if (!tier || (tier !== 'PRO' && tier !== 'ELITE')) {
+      return res.status(400).json({ error: 'Invalid or missing tier. Must be PRO or ELITE.' });
+    }
+    if (!cycle || (cycle !== 'monthly' && cycle !== 'yearly')) {
+      return res.status(400).json({ error: 'Invalid or missing billing cycle. Must be monthly or yearly.' });
+    }
+
+    const callbackUrl = req.body.callbackUrl || `${req.headers.origin || 'http://localhost:3000'}/billing`;
+    const email = req.body.email || user.email;
+    if (!email) {
+      return res.status(400).json({ error: 'User email is required to initialize payment.' });
+    }
+
+    const result = await initializePayment({
+      uid: user.uid,
+      email,
+      tier,
+      cycle,
+      callbackUrl,
+    });
+
+    return res.json(result);
+  } catch (error) {
+    return handleServerError(res, error, 'PaymentInitialize');
+  }
+});
+
+// Verify a Paystack transaction after redirect callback
+app.get('/api/payment/verify', async (req: Request, res: Response) => {
+  try {
+    const { user } = await verifyAuthToken(req.headers.authorization);
+    const reference = req.query.reference as string;
+
+    if (!reference) {
+      return res.status(400).json({ error: 'Missing transaction reference.' });
+    }
+
+    const result = await activateSubscriptionFromPayment(reference);
+
+    if (result.uid !== user.uid) {
+      return res.status(403).json({ error: 'Transaction does not belong to authenticated user.' });
+    }
+
+    return res.json(result);
+  } catch (error) {
+    return handleServerError(res, error, 'PaymentVerify');
+  }
+});
+
+// Paystack webhook — server-to-server notification
+app.post('/api/payment/webhook', express.json({ limit: '1mb' }), async (req: Request, res: Response) => {
+  try {
+    const rawBody = JSON.stringify(req.body);
+    const signature = req.headers['x-paystack-signature'] as string | undefined;
+
+    if (!verifyWebhookSignature(rawBody, signature)) {
+      return res.status(401).json({ error: 'Invalid webhook signature.' });
+    }
+
+    const event = req.body;
+
+    if (event.event === 'charge.success') {
+      const reference = event.data?.reference;
+      if (reference) {
+        await activateSubscriptionFromPayment(reference);
+      }
+    }
+
+    return res.status(200).json({ status: 'ok' });
+  } catch (error) {
+    console.error('[Paystack Webhook Error]', error);
+    return res.status(200).json({ status: 'ok' });
+  }
+});
+
+// Cancel subscription — downgrades to FREE
+app.post('/api/payment/cancel', async (req: Request, res: Response) => {
+  try {
+    const { user } = await verifyAuthToken(req.headers.authorization);
+    await cancelSubscription(user.uid);
+    return res.json({ status: 'cancelled', tier: 'FREE' });
+  } catch (error) {
+    return handleServerError(res, error, 'PaymentCancel');
   }
 });
 

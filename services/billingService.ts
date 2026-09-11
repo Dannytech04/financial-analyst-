@@ -1,4 +1,5 @@
 import { SubscriptionTier, User } from '@/types';
+import { auth } from './firebase';
 
 export interface PlanConfig {
   id: SubscriptionTier;
@@ -43,11 +44,86 @@ export const SUBSCRIPTION_PLANS: PlanConfig[] = [
 
 export const billingService = {
   /**
-   * INVARIANT: Subscription tier and expiry are strictly server-controlled fields.
-   * Firestore security rules forbid client-side modifications to `tier` and `subscriptionExpiry`.
-   * Real production tier elevation must be provisioned via server-side billing webhooks.
+   * Initializes a Paystack transaction by calling the server.
+   * Returns the authorization URL to redirect the user to Paystack's checkout.
    */
-  async activateTier(_user: User, _tier: SubscriptionTier, _sessionId = 'STRIPE_CHECKOUT_SESSION'): Promise<User> {
-    throw new Error('Payment processing is not yet configured. Please contact support to upgrade your plan.');
-  }
+  async initializePayment(tier: SubscriptionTier, cycle: 'monthly' | 'yearly'): Promise<{ authorizationUrl: string; reference: string }> {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      throw new Error('Authentication required to upgrade your plan.');
+    }
+
+    const token = await currentUser.getIdToken();
+    const response = await fetch('/api/payment/initialize', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        tier,
+        cycle,
+        email: currentUser.email,
+        callbackUrl: `${window.location.origin}/billing`,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData?.error || 'Failed to initialize payment. Please try again.');
+    }
+
+    return response.json();
+  },
+
+  /**
+   * Verifies a Paystack transaction after the user returns from checkout.
+   * The server verifies with Paystack and activates the subscription in Firestore.
+   */
+  async verifyPayment(reference: string): Promise<{ uid: string; tier: SubscriptionTier; status: string; subscriptionExpiry: number }> {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      throw new Error('Authentication required to verify payment.');
+    }
+
+    const token = await currentUser.getIdToken();
+    const response = await fetch(`/api/payment/verify?reference=${encodeURIComponent(reference)}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData?.error || 'Payment verification failed. Please contact support.');
+    }
+
+    return response.json();
+  },
+
+  /**
+   * Cancels the current subscription, downgrading to FREE.
+   */
+  async cancelSubscription(): Promise<{ status: string; tier: SubscriptionTier }> {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      throw new Error('Authentication required to cancel subscription.');
+    }
+
+    const token = await currentUser.getIdToken();
+    const response = await fetch('/api/payment/cancel', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData?.error || 'Failed to cancel subscription. Please try again.');
+    }
+
+    return response.json();
+  },
 };

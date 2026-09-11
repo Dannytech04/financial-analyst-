@@ -1,7 +1,7 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { SubscriptionTier, User, Toast } from '@/types';
-import { Gateway } from '@/services/geminiService';
+import { billingService } from '@/services/billingService';
 
 interface PlanDetails {
   id: SubscriptionTier;
@@ -54,19 +54,51 @@ const BillingSection: React.FC<BillingSectionProps> = ({ user, onUpdateUser, add
   const [cycle, setCycle] = useState<'monthly' | 'yearly'>('monthly');
   const [isProcessing, setIsProcessing] = useState(false);
   const [showCheckout, setShowCheckout] = useState<PlanDetails | null>(null);
+  const [verifying, setVerifying] = useState(false);
+
+  // Check for Paystack redirect callback (?reference=...)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const reference = params.get('reference');
+    if (reference) {
+      setVerifying(true);
+      billingService.verifyPayment(reference)
+        .then((result) => {
+          onUpdateUser({ ...user, tier: result.tier, subscriptionExpiry: result.subscriptionExpiry });
+          addToast(`${result.tier} subscription activated successfully!`, 'success');
+          window.history.replaceState({}, '', '/billing');
+        })
+        .catch((e: unknown) => {
+          const err = e as Error;
+          addToast(err.message || 'Payment verification failed. Please contact support.', 'error');
+        })
+        .finally(() => setVerifying(false));
+    }
+  }, []);
 
   const handleInitializePayment = (plan: PlanDetails): void => {
     setShowCheckout(plan);
   };
 
-  const handleSimulatePayment = async (): Promise<void> => {
+  const handleConfirmPayment = async (): Promise<void> => {
     if (!showCheckout) return;
     setIsProcessing(true);
     try {
-      const updatedUser = await Gateway.verifyPayment("SIM_SESSION_123", showCheckout.id);
-      onUpdateUser(updatedUser);
-      addToast(`${showCheckout.name} Activation Successful!`, 'success');
-      setShowCheckout(null);
+      const result = await billingService.initializePayment(showCheckout.id, cycle);
+      window.location.href = result.authorizationUrl;
+    } catch (e: unknown) {
+      const err = e as Error;
+      addToast(err.message, 'error');
+      setIsProcessing(false);
+    }
+  };
+
+  const handleCancelSubscription = async (): Promise<void> => {
+    setIsProcessing(true);
+    try {
+      await billingService.cancelSubscription();
+      onUpdateUser({ ...user, tier: SubscriptionTier.FREE, subscriptionExpiry: undefined });
+      addToast('Subscription cancelled. You are now on the FREE plan.', 'info');
     } catch (e: unknown) {
       const err = e as Error;
       addToast(err.message, 'error');
@@ -75,20 +107,44 @@ const BillingSection: React.FC<BillingSectionProps> = ({ user, onUpdateUser, add
     }
   };
 
+  if (verifying) {
+    return (
+      <div className="max-w-6xl mx-auto py-12 px-4 pb-32 flex items-center justify-center min-h-[60vh]">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-violet-500/30 border-t-violet-500 rounded-full animate-spin mx-auto mb-6"></div>
+          <h3 className="text-xl font-black uppercase tracking-tighter italic text-slate-800 dark:text-white">Verifying Payment</h3>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mt-2">Confirming your transaction with Paystack…</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-6xl mx-auto py-12 px-4 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-32">
       <div className="text-center mb-16">
         <h2 className="text-4xl font-black text-slate-900 dark:text-white mb-4 tracking-tighter uppercase italic">Institutional Access</h2>
         <div className="inline-flex items-center gap-2 px-4 py-2 bg-slate-100 dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700">
-          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Current Protocol:</p>
+          <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Current Plan:</p>
           <span className={`text-[10px] font-black uppercase tracking-widest ${user.tier === SubscriptionTier.FREE ? 'text-slate-400' : 'text-violet-500'}`}>
             {user.tier} ACCESS
           </span>
         </div>
 
+        {user.tier !== SubscriptionTier.FREE && (
+          <div className="mt-6">
+            <button
+              onClick={handleCancelSubscription}
+              disabled={isProcessing}
+              className="text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-rose-500 transition-colors disabled:opacity-30"
+            >
+              Cancel Subscription
+            </button>
+          </div>
+        )}
+
         <div className="mt-10 flex items-center justify-center gap-4">
           <span className={`text-[11px] font-black uppercase tracking-widest transition-colors ${cycle === 'monthly' ? 'text-violet-600' : 'text-slate-400'}`}>Monthly</span>
-          <button 
+          <button
             onClick={() => setCycle(cycle === 'monthly' ? 'yearly' : 'monthly')}
             className="w-14 h-7 bg-slate-200 dark:bg-slate-800 rounded-full p-1 transition-all relative ring-1 ring-slate-300 dark:ring-slate-700"
           >
@@ -119,18 +175,18 @@ const BillingSection: React.FC<BillingSectionProps> = ({ user, onUpdateUser, add
             ))}
           </ul>
           <button disabled className="w-full py-4 rounded-2xl font-black text-[10px] uppercase tracking-[0.3em] border border-slate-200 dark:border-slate-800 text-slate-300">
-            {user.tier === SubscriptionTier.FREE ? 'Current Access' : 'Inactive'}
+            {user.tier === SubscriptionTier.FREE ? 'Current Plan' : 'Inactive'}
           </button>
         </div>
 
         {PLANS.map((plan) => (
           <div key={plan.id} className={`relative rounded-[2.5rem] p-10 flex flex-col transition-all duration-500 hover:scale-[1.02] border-2 group ${plan.id === SubscriptionTier.ELITE ? 'bg-slate-950 border-pink-500 shadow-2xl shadow-pink-500/10 text-white' : 'bg-white dark:bg-slate-900 border-violet-500 dark:border-violet-500 shadow-xl'}`}>
             {user.tier === plan.id && (
-              <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-emerald-500 text-white text-[9px] font-black px-5 py-2 rounded-full uppercase tracking-[0.3em] shadow-xl z-10">Active Tier</div>
+              <div className="absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-emerald-500 text-white text-[9px] font-black px-5 py-2 rounded-full uppercase tracking-[0.3em] shadow-xl z-10">Active Plan</div>
             )}
             <div className="mb-6">
               <h3 className={`text-xl font-black uppercase tracking-tighter italic ${plan.id === SubscriptionTier.ELITE ? 'text-pink-500' : 'text-violet-600'}`}>{plan.name}</h3>
-              <p className="text-[9px] font-bold uppercase tracking-widest opacity-40 mt-1">Institutional Protocol</p>
+              <p className="text-[9px] font-bold uppercase tracking-widest opacity-40 mt-1">Institutional Plan</p>
             </div>
             <div className="mb-10">
               <span className="text-6xl font-black tracking-tighter italic">${cycle === 'monthly' ? plan.monthlyPrice : Math.round(plan.yearlyPrice / 12)}</span>
@@ -145,12 +201,12 @@ const BillingSection: React.FC<BillingSectionProps> = ({ user, onUpdateUser, add
                 </li>
               ))}
             </ul>
-            <button 
+            <button
               onClick={() => handleInitializePayment(plan)}
-              disabled={user.tier === plan.id}
+              disabled={user.tier === plan.id || isProcessing}
               className={`w-full py-5 rounded-2xl font-black text-[11px] uppercase tracking-[0.4em] transition-all transform active:scale-95 shadow-xl disabled:opacity-30 ${plan.id === SubscriptionTier.ELITE ? 'bg-pink-600 hover:bg-pink-500 text-white' : 'bg-violet-600 hover:bg-violet-500 text-white'}`}
             >
-              {user.tier === plan.id ? 'Active' : 'Initialize Upgrade'}
+              {user.tier === plan.id ? 'Current Plan' : 'Upgrade Now'}
             </button>
           </div>
         ))}
@@ -161,9 +217,9 @@ const BillingSection: React.FC<BillingSectionProps> = ({ user, onUpdateUser, add
           <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-xl animate-in fade-in duration-300" onClick={() => !isProcessing && setShowCheckout(null)}></div>
           <div className="relative bg-white dark:bg-slate-900 rounded-[3rem] p-12 w-full max-w-xl shadow-2xl border border-slate-200 dark:border-slate-800 animate-in zoom-in-95 duration-500 overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-violet-600 via-pink-500 to-violet-600"></div>
-            
-            <button 
-              onClick={() => setShowCheckout(null)} 
+
+            <button
+              onClick={() => setShowCheckout(null)}
               disabled={isProcessing}
               className="absolute top-8 right-8 text-slate-400 hover:text-slate-600 dark:hover:text-white transition-colors disabled:opacity-20"
             >
@@ -174,26 +230,26 @@ const BillingSection: React.FC<BillingSectionProps> = ({ user, onUpdateUser, add
               <div className="w-20 h-20 bg-violet-600/10 rounded-3xl flex items-center justify-center mx-auto mb-8 ring-1 ring-violet-500/20">
                 <svg className="w-10 h-10 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
               </div>
-              <h3 className="text-3xl font-black uppercase tracking-tighter mb-2 italic">Secure Terminal Link</h3>
+              <h3 className="text-3xl font-black uppercase tracking-tighter mb-2 italic">Upgrade to {showCheckout.name}</h3>
               <p className="text-slate-500 dark:text-slate-400 text-[10px] font-bold uppercase tracking-widest opacity-60 leading-relaxed max-w-xs mx-auto">
-                Authorized access for {showCheckout.name}. <br/> {cycle === 'monthly' ? `$${showCheckout.monthlyPrice}/month` : `$${showCheckout.yearlyPrice}/year`}
+                {cycle === 'monthly' ? `$${showCheckout.monthlyPrice}/month` : `$${showCheckout.yearlyPrice}/year`}
               </p>
             </div>
 
             <div className="space-y-6 mb-10">
               <div className="bg-slate-50 dark:bg-slate-800/50 rounded-3xl p-6 border border-slate-200 dark:border-slate-700/50">
                 <div className="flex justify-between items-end pb-4 border-b border-slate-200 dark:border-slate-700 mb-4">
-                  <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Protocol Activation</span>
+                  <span className="text-[10px] font-black uppercase text-slate-400 tracking-widest">Plan Summary</span>
                   <span className="text-2xl font-mono font-black text-violet-600">${cycle === 'monthly' ? showCheckout.monthlyPrice : showCheckout.yearlyPrice}</span>
                 </div>
-                
+
                 <div className="space-y-4">
                   <div className="space-y-2">
                     <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Payment Provider</label>
                     <div className="flex gap-2">
                       <div className="flex-1 p-3 bg-white dark:bg-slate-950 border border-violet-500 rounded-xl flex items-center justify-center gap-2">
                         <div className="w-2 h-2 bg-violet-500 rounded-full animate-pulse"></div>
-                        <span className="text-[10px] font-black uppercase italic tracking-widest">STRIPE-GATEWAY</span>
+                        <span className="text-[10px] font-black uppercase italic tracking-widest">PAYSTACK</span>
                       </div>
                     </div>
                   </div>
@@ -203,22 +259,22 @@ const BillingSection: React.FC<BillingSectionProps> = ({ user, onUpdateUser, add
               <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-2xl flex gap-4">
                 <svg className="w-5 h-5 text-amber-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
                 <p className="text-[10px] font-bold text-amber-700 dark:text-amber-400 leading-relaxed uppercase tracking-tight">
-                  Subscription will automatically renew. You can revoke access at any time from your Alpha Terminal dashboard.
+                  You will be redirected to Paystack to complete your payment securely. Your subscription will activate automatically once payment is confirmed.
                 </p>
               </div>
             </div>
 
-            <button 
-              onClick={handleSimulatePayment} 
+            <button
+              onClick={handleConfirmPayment}
               disabled={isProcessing}
               className={`w-full py-5 rounded-[2rem] font-black text-[12px] uppercase tracking-[0.5em] transition-all flex items-center justify-center gap-4 shadow-2xl ${isProcessing ? 'bg-slate-100 dark:bg-slate-800 text-slate-400' : 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 hover:scale-[1.02] active:scale-95'}`}
             >
               {isProcessing ? (
                 <>
                   <div className="w-4 h-4 border-2 border-slate-400/30 border-t-slate-400 rounded-full animate-spin"></div>
-                  Validating Transfer...
+                  Redirecting to Paystack…
                 </>
-              ) : 'Confirm and Link Terminal'}
+              ) : 'Continue to Paystack'}
             </button>
           </div>
         </div>

@@ -43,19 +43,8 @@ class AIGateway {
     return response.json() as Promise<T>;
   }
 
-  async verifyPayment(sessionId: string, tier: SubscriptionTier, user?: User): Promise<User> {
-    if (!auth.currentUser) {
-      throw new Error("Authentication required to upgrade plan.");
-    }
-    const baseUser: User = user || {
-      id: auth.currentUser.uid,
-      userId: auth.currentUser.uid,
-      username: auth.currentUser.displayName || 'TRADER',
-      balance: 100000,
-      tier: SubscriptionTier.FREE,
-      usageCount: { vision: 0, audit: 0 }
-    };
-    return billingService.activateTier(baseUser, tier, sessionId);
+  async verifyPayment(reference: string): Promise<{ uid: string; tier: SubscriptionTier; status: string; subscriptionExpiry: number }> {
+    return billingService.verifyPayment(reference);
   }
 
   // --- AI Server-Side Proxied Calls with Authoritative Enforcement ---
