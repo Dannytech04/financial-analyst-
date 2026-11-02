@@ -28,9 +28,8 @@ export function clearTestSubscriptions() {
  * Verifies a Supabase Auth JWT from the Authorization header.
  * Rejects untrusted or missing tokens with clear error messages.
  *
- * Replaces the former Firebase Identity Toolkit verification. We decode the
- * JWT locally to inspect structure/expiration, then verify it against the
- * Supabase auth endpoint to confirm the user exists and the session is valid.
+ * Decodes the JWT locally to inspect structure/expiration, then verifies it
+ * against the Supabase auth endpoint to confirm the session is valid.
  */
 export async function verifyAuthToken(authHeader?: string): Promise<{ user: AuthenticatedUser; rawToken: string }> {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {

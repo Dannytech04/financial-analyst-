@@ -1,5 +1,5 @@
 /**
- * Supabase client-side service — replaces the former Firebase/Firestore layer.
+ * Supabase client-side service for authentication and user-owned data.
  *
  * Exports the same function names the rest of the app imports:
  *   auth (Supabase client), loginWithGoogle, loginWithEmail, registerWithEmail,
@@ -14,8 +14,6 @@ import { supabase } from './supabaseClient';
 import { Trade, UserGoals, User, UserSubscription, SubscriptionTier } from '../types';
 import type { Session, User as SupabaseUser } from '@supabase/supabase-js';
 
-// Re-export supabase so existing `import { auth } from '@/services/firebase'` callers
-// can switch to `import { auth } from '@/services/supabase'` with minimal churn.
 export const auth = supabase.auth;
 
 export { supabase };
@@ -321,7 +319,7 @@ export function subscribeToUserSubscription(userId: string, callback: (sub: User
           callback({
             userId,
             tier: (data.tier as SubscriptionTier) || SubscriptionTier.FREE,
-            status: (data.status as string) || 'ACTIVE',
+            status: (data.status as UserSubscription['status']) || 'ACTIVE',
             subscriptionExpiry: (data.subscription_expiry as number) ?? null,
             usageCount: { vision: (data.usage_vision as number) ?? 0, audit: (data.usage_audit as number) ?? 0 },
             createdAt: data.created_at as string,
@@ -389,8 +387,6 @@ export async function saveTradeToFirestore(userId: string, trade: Trade): Promis
       status: trade.status,
       session: trade.session,
       timestamp: trade.timestamp,
-      created_at: now,
-      updated_at: now,
     };
 
     if (trade.exitPrice !== undefined && trade.exitPrice !== null) payload.exit_price = trade.exitPrice;
@@ -505,11 +501,9 @@ export async function saveGoalsToFirestore(userId: string, goals: UserGoals): Pr
   try {
     const now = new Date().toISOString();
     const payload = {
-      user_id: userId,
       monthly_profit_target: goals.monthlyProfitTarget,
       win_rate_target: goals.winRateTarget,
       trades_per_month_target: goals.tradesPerMonthTarget,
-      updated_at: now,
     };
 
     const { error } = await supabase.from('user_goals').upsert(payload, { onConflict: 'user_id' });

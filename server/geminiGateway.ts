@@ -140,7 +140,7 @@ ${SAFETY_UNCERTAINTY_CONSTRAINTS}
       if (!value || typeof value !== 'object') return;
       const record = value as Record<string, unknown>;
       const url = typeof record.url === 'string' ? record.url : undefined;
-      if (url && /^https?:\\/\\//.test(url) && !seenUris.has(url)) {
+      if (url && /^https?:\/\//.test(url) && !seenUris.has(url)) {
         seenUris.add(url);
         sources.push({ title: typeof record.title === 'string' ? record.title : 'Financial Intelligence Source', uri: url });
       }

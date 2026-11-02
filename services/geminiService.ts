@@ -50,7 +50,7 @@ class AIGateway {
 
   /**
    * 1. Market/News Intelligence Briefing
-   * Routed to gemini-3.6-flash with Google Search Grounding
+   * Routed to the fast hosted model with web search
    */
   async fetchMarketNews(query = "Global market sentiment"): Promise<{ text: string; sources: { title: string; uri: string }[]; modelUsed?: string }> {
     try {
@@ -81,7 +81,7 @@ class AIGateway {
 
   /**
    * 2. Single Trade Audit
-   * Routed to gemini-3.6-flash with Structured Output schema
+   * Routed to the fast hosted model with structured output
    */
   async auditTrade(trade: Trade): Promise<TradeAuditResult & { usageCount?: { vision: number; audit: number }; tier?: SubscriptionTier }> {
     try {
@@ -93,7 +93,7 @@ class AIGateway {
 
   /**
    * 3. Deep Trade Analysis
-   * Routed to gemini-3.1-pro-preview with ThinkingLevel.HIGH
+   * Routed to the deep hosted model with fallback
    */
   async deepAudit(trades: Trade[]): Promise<TradeAuditResult & { modelUsed?: string; thinkingApplied?: boolean }> {
     try {
@@ -105,7 +105,7 @@ class AIGateway {
 
   /**
    * 4. Alpha Vision Chart Analysis
-   * Routed to gemini-3.6-flash with Structured Output schema
+   * Routed to the fast hosted model with structured output
    */
   async analyzeChart(imageBase64: string, mimeType: string): Promise<ChartAnalysisResult & { modelUsed?: string }> {
     try {
@@ -117,7 +117,7 @@ class AIGateway {
 
   /**
    * 5. General Chat
-   * Routed to gemini-3.1-pro-preview when thinkingMode is true, gemini-3.6-flash otherwise
+   * Routed to the deep hosted model when thinkingMode is true, the fast model otherwise
    */
   async chat(
     history: { role: 'user' | 'model'; parts: { text: string }[] }[],
