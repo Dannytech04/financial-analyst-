@@ -1,27 +1,40 @@
-import { GoogleGenAI, Type, ThinkingLevel, GenerateContentResponse } from '@google/genai';
+/**
+ * AI Gateway — OpenAI-based replacement for the former Gemini gateway.
+ *
+ * Replacement choice: OpenAI. It is the most widely used hosted model API,
+ * has a single well-known SDK (@openai/openai), supports JSON-schema
+ * structured output (response_format: json_schema), multimodal vision
+ * (GPT-4o-mini), and a built-in web search tool for grounded news.
+ *
+ * Model mapping (preserves the fast/deep two-tier routing):
+ *   FAST_GENERAL  → 'gpt-4o-mini'         (was gemini-3.6-flash)
+ *   DEEP_REASONING → 'gpt-4o'             (was gemini-3.1-pro-preview)
+ *
+ * The "thinking mode" concept maps to model selection: thinkingMode = true
+ * uses the deep reasoning model, false uses the fast model. Both models
+ * support structured output and multimodal input.
+ *
+ * Web-grounded news: OpenAI's built-in web_search tool is used instead of
+ * Google Search grounding. This keeps it a single API call with no separate
+ * search step, matching the original Gemini approach.
+ */
+import OpenAI from 'openai';
 import { ChartAnalysisResult, TradeAuditResult, Trade } from '../types';
 
-export const GEMINI_MODELS = {
-  FAST_GENERAL: 'gemini-3.6-flash',
-  DEEP_REASONING: 'gemini-3.1-pro-preview',
+export const AI_MODELS = {
+  FAST_GENERAL: 'gpt-4o-mini',
+  DEEP_REASONING: 'gpt-4o',
 } as const;
 
-let aiClient: GoogleGenAI | null = null;
+let aiClient: OpenAI | null = null;
 
-export function getGeminiClient(): GoogleGenAI {
+export function getAIClient(): OpenAI {
   if (!aiClient) {
-    const apiKey = process.env.GEMINI_API_KEY;
+    const apiKey = process.env.AI_PROVIDER_API_KEY;
     if (!apiKey) {
-      throw new Error('GEMINI_API_KEY environment variable is not configured on the server.');
+      throw new Error('AI_PROVIDER_API_KEY environment variable is not configured on the server.');
     }
-    aiClient = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
+    aiClient = new OpenAI({ apiKey });
   }
   return aiClient;
 }
@@ -47,12 +60,11 @@ export async function callWithRetryAndTimeout<T>(
       const isRateLimit =
         err?.status === 429 ||
         msg.includes('429') ||
-        msg.includes('RESOURCE_EXHAUSTED') ||
-        msg.includes('quota') ||
-        msg.includes('rate limit');
+        msg.includes('rate limit') ||
+        msg.includes('quota');
       if (isRateLimit && attempt < maxRetries) {
         const waitMs = attempt * 3000;
-        console.warn(`[Gemini Gateway] 429 rate limit encountered. Retrying in ${waitMs}ms (attempt ${attempt}/${maxRetries})...`);
+        console.warn(`[AI Gateway] 429 rate limit encountered. Retrying in ${waitMs}ms (attempt ${attempt}/${maxRetries})...`);
         await new Promise((resolve) => setTimeout(resolve, waitMs));
         continue;
       }
@@ -67,9 +79,6 @@ export async function callWithTimeout<T>(promise: Promise<T>, timeoutMs = 50000)
   return callWithRetryAndTimeout(() => promise, timeoutMs, 1);
 }
 
-/**
- * Standard uncertainty safety constraint appended to all financial prompts.
- */
 const SAFETY_UNCERTAINTY_CONSTRAINTS = `
 MANDATORY SAFETY & UNCERTAINTY CONSTRAINTS:
 1. Do NOT make unsupported claims of certainty or guarantee price targets, win probabilities, or market direction.
@@ -80,14 +89,19 @@ MANDATORY SAFETY & UNCERTAINTY CONSTRAINTS:
 
 /**
  * 1. Market/News Summaries
- * Model: gemini-3.6-flash
+ * Model: gpt-4o-mini with web_search tool
+ *
+ * Web-grounded news replacement: OpenAI's built-in web_search tool provides
+ * real-time web results within the same API call, replacing Gemini's Google
+ * Search grounding. This keeps it a single-step approach with no separate
+ * search service needed.
  */
 export async function generateMarketNewsSummary(
   query: string,
   userContext?: { username?: string }
 ): Promise<{ text: string; sources: Array<{ title: string; uri: string }>; modelUsed: string }> {
-  const ai = getGeminiClient();
-  const model = GEMINI_MODELS.FAST_GENERAL;
+  const client = getAIClient();
+  const model = AI_MODELS.FAST_GENERAL;
 
   const prompt = `
 TASK TYPE: Macroeconomic & Geopolitical Market Intelligence Briefing
@@ -105,35 +119,34 @@ ${SAFETY_UNCERTAINTY_CONSTRAINTS}
 `;
 
   try {
-    const response = await callWithRetryAndTimeout<GenerateContentResponse>(
+    const response = await callWithRetryAndTimeout(
       () =>
-        ai.models.generateContent({
+        client.responses.create({
           model,
-          contents: [{ parts: [{ text: prompt }] }],
-          config: {
-            tools: [{ googleSearch: {} }],
-          },
+          instructions: prompt,
+          tools: [{ type: 'web_search' }],
         }),
       35000
     );
 
-    const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    const sources = chunks
-      .map((c: any) => ({
-        title: c.web?.title || 'Financial Intelligence Source',
-        uri: c.web?.uri || '#',
-      }))
-      .filter((s: any) => s.uri !== '#');
+    // Extract sources from the response annotations
+    const sources: Array<{ title: string; uri: string }> = [];
+    for (const item of response.output) {
+      if (item.type === 'web_search_call' && item.results) {
+        for (const result of item.results) {
+          sources.push({ title: result.title, uri: result.url });
+        }
+      }
+    }
 
     return {
-      text: response.text || 'Market briefing data unavailable at this moment.',
+      text: response.output_text || 'Market briefing data unavailable at this moment.',
       sources,
       modelUsed: model,
     };
   } catch (apiErr: any) {
     const msg = apiErr?.message || '';
-    if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('quota')) {
-      // Return structured baseline outlook when live search rate limits are reached
+    if (msg.includes('429') || msg.includes('quota') || msg.includes('rate limit')) {
       return {
         text: `Market Intelligence Briefing (${query}):\n\nMacroeconomic conditions remain dictated by central bank policy expectations and interest rate differentials. Major asset classes are testing significant multi-timeframe structural zones. Traders should exercise strict position sizing around scheduled high-impact economic data releases.\n\n(Baseline briefing active: Search tool quota currently reached.)`,
         sources: [],
@@ -145,59 +158,34 @@ ${SAFETY_UNCERTAINTY_CONSTRAINTS}
 }
 
 /**
- * Schema for Single Trade and Deep Trade Audits
+ * JSON schema for single/deep trade audits. Used as response_format.
  */
 const TradeAuditSchema = {
-  type: Type.OBJECT,
+  type: 'object',
   properties: {
-    summary: { type: Type.STRING },
-    strengths: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    weaknesses: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    executionIssues: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    riskIssues: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    recurringPatterns: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    improvementAreas: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    disclaimer: { type: Type.STRING },
+    summary: { type: 'string' },
+    strengths: { type: 'array', items: { type: 'string' } },
+    weaknesses: { type: 'array', items: { type: 'string' } },
+    executionIssues: { type: 'array', items: { type: 'string' } },
+    riskIssues: { type: 'array', items: { type: 'string' } },
+    recurringPatterns: { type: 'array', items: { type: 'string' } },
+    improvementAreas: { type: 'array', items: { type: 'string' } },
+    disclaimer: { type: 'string' },
   },
-  required: [
-    'summary',
-    'strengths',
-    'weaknesses',
-    'executionIssues',
-    'riskIssues',
-    'recurringPatterns',
-    'improvementAreas',
-  ],
-};
+  required: ['summary', 'strengths', 'weaknesses', 'executionIssues', 'riskIssues', 'recurringPatterns', 'improvementAreas'],
+  additionalProperties: false,
+} as const;
 
 /**
  * 2. Single Trade Audit
- * Model: gemini-3.6-flash (Fast structured analysis)
+ * Model: gpt-4o-mini (Fast structured analysis)
  */
 export async function auditSingleTrade(
   trade: Trade,
   userContext?: { username?: string; balance?: number }
 ): Promise<TradeAuditResult & { modelUsed: string }> {
-  const ai = getGeminiClient();
-  const model = GEMINI_MODELS.FAST_GENERAL;
+  const client = getAIClient();
+  const model = AI_MODELS.FAST_GENERAL;
 
   const prompt = `
 TASK TYPE: Single Trade Execution & Risk Audit
@@ -229,20 +217,17 @@ Return an objective, structured audit of this trade execution evaluating:
 ${SAFETY_UNCERTAINTY_CONSTRAINTS}
 `;
 
-  const response = await callWithRetryAndTimeout<GenerateContentResponse>(
+  const response = await callWithRetryAndTimeout(
     () =>
-      ai.models.generateContent({
+      client.chat.completions.create({
         model,
-        contents: [{ parts: [{ text: prompt }] }],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: TradeAuditSchema,
-        },
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_schema', json_schema: { name: 'trade_audit', schema: TradeAuditSchema, strict: true } },
       }),
     35000
   );
 
-  const rawJson = response.text || '{}';
+  const rawJson = response.choices[0]?.message?.content || '{}';
   const parsed = JSON.parse(rawJson) as TradeAuditResult;
   return {
     ...parsed,
@@ -253,16 +238,14 @@ ${SAFETY_UNCERTAINTY_CONSTRAINTS}
 
 /**
  * 3. Deep Trade Analysis
- * Model: gemini-3.1-pro-preview with ThinkingLevel.HIGH
- * Falls back gracefully to gemini-3.6-flash if Pro quota is unavailable on the key.
+ * Model: gpt-4o (deep reasoning), falls back to gpt-4o-mini if quota is unavailable.
  */
 export async function auditTradesDeeply(
   trades: Trade[],
   userContext?: { username?: string; balance?: number }
 ): Promise<TradeAuditResult & { modelUsed: string; thinkingApplied: boolean }> {
-  const ai = getGeminiClient();
+  const client = getAIClient();
 
-  // Aggregate structured portfolio metrics
   const totalTrades = trades.length;
   const wins = trades.filter((t) => t.status === 'WIN').length;
   const losses = trades.filter((t) => t.status === 'LOSS').length;
@@ -302,113 +285,81 @@ Conduct an exhaustive, quantitative deep reasoning review of the trader's behavi
 ${SAFETY_UNCERTAINTY_CONSTRAINTS}
 `;
 
-  // First attempt: gemini-3.1-pro-preview with real ThinkingLevel.HIGH
+  // First attempt: gpt-4o (deep reasoning)
   try {
-    const response = await callWithRetryAndTimeout<GenerateContentResponse>(
+    const response = await callWithRetryAndTimeout(
       () =>
-        ai.models.generateContent({
-          model: GEMINI_MODELS.DEEP_REASONING,
-          contents: [{ parts: [{ text: prompt }] }],
-          config: {
-            responseMimeType: 'application/json',
-            thinkingConfig: {
-              thinkingLevel: ThinkingLevel.HIGH,
-            },
-            responseSchema: TradeAuditSchema,
-          },
+        client.chat.completions.create({
+          model: AI_MODELS.DEEP_REASONING,
+          messages: [{ role: 'user', content: prompt }],
+          response_format: { type: 'json_schema', json_schema: { name: 'trade_audit', schema: TradeAuditSchema, strict: true } },
         }),
       55000
     );
 
-    const parsed = JSON.parse(response.text || '{}') as TradeAuditResult;
+    const parsed = JSON.parse(response.choices[0]?.message?.content || '{}') as TradeAuditResult;
     return {
       ...parsed,
       disclaimer: parsed.disclaimer || 'Deep trade analysis reflects historical sample distributions. Past results do not guarantee future returns.',
-      modelUsed: GEMINI_MODELS.DEEP_REASONING,
+      modelUsed: AI_MODELS.DEEP_REASONING,
       thinkingApplied: true,
     };
   } catch (proErr: any) {
-    console.warn(`[Deep Reasoning Fallback] gemini-3.1-pro-preview unavailable (${proErr?.message}). Routing to gemini-3.6-flash.`);
+    console.warn(`[Deep Reasoning Fallback] ${AI_MODELS.DEEP_REASONING} unavailable (${proErr?.message}). Routing to ${AI_MODELS.FAST_GENERAL}.`);
 
-    // Graceful fallback to gemini-3.6-flash if pro quota limit is reached on free tier key
-    const fallbackResponse = await callWithRetryAndTimeout<GenerateContentResponse>(
+    const fallbackResponse = await callWithRetryAndTimeout(
       () =>
-        ai.models.generateContent({
-          model: GEMINI_MODELS.FAST_GENERAL,
-          contents: [{ parts: [{ text: prompt }] }],
-          config: {
-            responseMimeType: 'application/json',
-            responseSchema: TradeAuditSchema,
-          },
+        client.chat.completions.create({
+          model: AI_MODELS.FAST_GENERAL,
+          messages: [{ role: 'user', content: prompt }],
+          response_format: { type: 'json_schema', json_schema: { name: 'trade_audit', schema: TradeAuditSchema, strict: true } },
         }),
       50000
     );
 
-    const parsed = JSON.parse(fallbackResponse.text || '{}') as TradeAuditResult;
+    const parsed = JSON.parse(fallbackResponse.choices[0]?.message?.content || '{}') as TradeAuditResult;
     return {
       ...parsed,
       disclaimer: parsed.disclaimer || 'Analysis generated via high-speed neural model under current quota allocation.',
-      modelUsed: GEMINI_MODELS.FAST_GENERAL,
+      modelUsed: AI_MODELS.FAST_GENERAL,
       thinkingApplied: false,
     };
   }
 }
 
 /**
- * Schema for Chart Analysis Result
+ * JSON schema for chart analysis.
  */
 const ChartAnalysisSchema = {
-  type: Type.OBJECT,
+  type: 'object',
   properties: {
-    symbol: { type: Type.STRING },
-    timeframe: { type: Type.STRING },
-    marketStructure: { type: Type.STRING },
-    trend: { type: Type.STRING },
-    supportLevels: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    resistanceLevels: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    keyZones: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    invalidation: { type: Type.STRING },
-    confidence: { type: Type.STRING },
-    observations: {
-      type: Type.ARRAY,
-      items: { type: Type.STRING },
-    },
-    disclaimer: { type: Type.STRING },
+    symbol: { type: 'string' },
+    timeframe: { type: 'string' },
+    marketStructure: { type: 'string' },
+    trend: { type: 'string' },
+    supportLevels: { type: 'array', items: { type: 'string' } },
+    resistanceLevels: { type: 'array', items: { type: 'string' } },
+    keyZones: { type: 'array', items: { type: 'string' } },
+    invalidation: { type: 'string' },
+    confidence: { type: 'string' },
+    observations: { type: 'array', items: { type: 'string' } },
+    disclaimer: { type: 'string' },
   },
-  required: [
-    'symbol',
-    'timeframe',
-    'marketStructure',
-    'trend',
-    'supportLevels',
-    'resistanceLevels',
-    'keyZones',
-    'invalidation',
-    'confidence',
-    'observations',
-  ],
-};
+  required: ['symbol', 'timeframe', 'marketStructure', 'trend', 'supportLevels', 'resistanceLevels', 'keyZones', 'invalidation', 'confidence', 'observations'],
+  additionalProperties: false,
+} as const;
 
 /**
  * 4. Chart Image Analysis
- * Model: gemini-3.6-flash (Fast multimodal vision)
+ * Model: gpt-4o-mini (multimodal vision)
  */
 export async function analyzeChartImage(
   imageBase64: string,
   mimeType: string,
   userContext?: { username?: string }
 ): Promise<ChartAnalysisResult & { modelUsed: string }> {
-  const ai = getGeminiClient();
-  const model = GEMINI_MODELS.FAST_GENERAL;
+  const client = getAIClient();
+  const model = AI_MODELS.FAST_GENERAL;
 
   const prompt = `
 TASK TYPE: Technical Chart Pattern & Market Structure Computer Vision Inspection
@@ -431,25 +382,25 @@ Examine the supplied chart image in detail and extract the following structured 
 ${SAFETY_UNCERTAINTY_CONSTRAINTS}
 `;
 
-  const response = await callWithRetryAndTimeout<GenerateContentResponse>(
+  const response = await callWithRetryAndTimeout(
     () =>
-      ai.models.generateContent({
+      client.chat.completions.create({
         model,
-        contents: {
-          parts: [
-            { inlineData: { data: imageBase64, mimeType } },
-            { text: prompt },
-          ],
-        },
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: ChartAnalysisSchema,
-        },
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
+              { type: 'text', text: prompt },
+            ],
+          },
+        ],
+        response_format: { type: 'json_schema', json_schema: { name: 'chart_analysis', schema: ChartAnalysisSchema, strict: true } },
       }),
     40000
   );
 
-  const parsed = JSON.parse(response.text || '{}') as ChartAnalysisResult;
+  const parsed = JSON.parse(response.choices[0]?.message?.content || '{}') as ChartAnalysisResult;
   return {
     ...parsed,
     disclaimer: parsed.disclaimer || 'Technical chart levels and patterns represent probabilistic scenarios and not guaranteed price forecasts.',
@@ -459,16 +410,16 @@ ${SAFETY_UNCERTAINTY_CONSTRAINTS}
 
 /**
  * 5. General Chat
- * Model Routing:
- * - gemini-3.1-pro-preview with ThinkingLevel.HIGH when thinkingMode is true
- * - gemini-3.6-flash when thinkingMode is false
+ * Model routing:
+ * - thinkingMode true → gpt-4o (deep reasoning)
+ * - thinkingMode false → gpt-4o-mini (fast)
  */
 export async function chatAssistant(
   history: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
   thinkingMode = false,
   userContext?: { username?: string }
 ): Promise<{ text: string; modelUsed: string; thinkingApplied: boolean }> {
-  const ai = getGeminiClient();
+  const client = getAIClient();
 
   const systemInstruction = `
 You are Alpha, an institutional financial analyst and quantitative trading mentor assisting ${userContext?.username || 'the trader'}.
@@ -477,64 +428,63 @@ Provide disciplined, data-driven answers on technical analysis, macroeconomics, 
 ${SAFETY_UNCERTAINTY_CONSTRAINTS}
 `;
 
+  // Map Gemini-style history to OpenAI messages
+  const messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }> = [
+    { role: 'system', content: systemInstruction },
+    ...history.map((msg) => ({
+      role: (msg.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: msg.parts.map((p) => p.text).join('\n'),
+    })),
+  ];
+
   if (thinkingMode) {
     try {
-      const response = await callWithRetryAndTimeout<GenerateContentResponse>(
+      const response = await callWithRetryAndTimeout(
         () =>
-          ai.models.generateContent({
-            model: GEMINI_MODELS.DEEP_REASONING,
-            contents: history,
-            config: {
-              systemInstruction,
-              thinkingConfig: {
-                thinkingLevel: ThinkingLevel.HIGH,
-              },
-            },
+          client.chat.completions.create({
+            model: AI_MODELS.DEEP_REASONING,
+            messages,
           }),
         50000
       );
 
       return {
-        text: response.text || 'Mentor intelligence stream finished without output.',
-        modelUsed: GEMINI_MODELS.DEEP_REASONING,
+        text: response.choices[0]?.message?.content || 'Mentor intelligence stream finished without output.',
+        modelUsed: AI_MODELS.DEEP_REASONING,
         thinkingApplied: true,
       };
     } catch (proErr: any) {
-      console.warn(`[Chat Thinking Fallback] gemini-3.1-pro-preview unavailable (${proErr?.message}). Routing to gemini-3.6-flash.`);
+      console.warn(`[Chat Thinking Fallback] ${AI_MODELS.DEEP_REASONING} unavailable (${proErr?.message}). Routing to ${AI_MODELS.FAST_GENERAL}.`);
 
-      // Fallback to flash if pro quota limit is reached on free tier key
-      const fallbackResponse = await callWithRetryAndTimeout<GenerateContentResponse>(
+      const fallbackResponse = await callWithRetryAndTimeout(
         () =>
-          ai.models.generateContent({
-            model: GEMINI_MODELS.FAST_GENERAL,
-            contents: history,
-            config: { systemInstruction },
+          client.chat.completions.create({
+            model: AI_MODELS.FAST_GENERAL,
+            messages,
           }),
         30000
       );
 
       return {
-        text: fallbackResponse.text || 'Mentor intelligence stream active.',
-        modelUsed: GEMINI_MODELS.FAST_GENERAL,
+        text: fallbackResponse.choices[0]?.message?.content || 'Mentor intelligence stream active.',
+        modelUsed: AI_MODELS.FAST_GENERAL,
         thinkingApplied: false,
       };
     }
   }
 
-  // Standard fast chat
-  const response = await callWithRetryAndTimeout<GenerateContentResponse>(
+  const response = await callWithRetryAndTimeout(
     () =>
-      ai.models.generateContent({
-        model: GEMINI_MODELS.FAST_GENERAL,
-        contents: history,
-        config: { systemInstruction },
+      client.chat.completions.create({
+        model: AI_MODELS.FAST_GENERAL,
+        messages,
       }),
     30000
   );
 
   return {
-    text: response.text || 'Mentor intelligence stream active.',
-    modelUsed: GEMINI_MODELS.FAST_GENERAL,
+    text: response.choices[0]?.message?.content || 'Mentor intelligence stream active.',
+    modelUsed: AI_MODELS.FAST_GENERAL,
     thinkingApplied: false,
   };
 }

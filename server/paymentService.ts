@@ -1,8 +1,9 @@
 /**
- * Payment service — bridges Paystack verification with Firestore subscription activation.
- * Uses Firebase Admin SDK to write tier changes that client SDK cannot (blocked by Firestore rules).
+ * Payment service — bridges Paystack verification with Supabase subscription activation.
+ * Uses the Supabase service-role admin client to write tier changes that client SDK
+ * cannot (blocked by RLS policies).
  */
-import { getAdminFirestore } from './firebaseAdmin';
+import { getSupabaseAdmin } from './supabaseAdmin';
 import { verifyTransaction, type VerifyTransactionResponse } from './paystackService';
 import { SubscriptionTier } from '../types';
 
@@ -80,6 +81,14 @@ async function initializeTransactionInternal(params: {
   return initializeTransaction(params);
 }
 
+/**
+ * Verifies the transaction against Paystack, checks the amount, and writes
+ * an ACTIVE subscription to the database with reset usage counters.
+ *
+ * Idempotency: if the subscription is already ACTIVE with a matching tier and
+ * a future expiry, this is a no-op (returns the existing state). This prevents
+ * a duplicate webhook from double-activating.
+ */
 export async function activateSubscriptionFromPayment(reference: string): Promise<{
   uid: string;
   tier: SubscriptionTier;
@@ -118,23 +127,43 @@ export async function activateSubscriptionFromPayment(reference: string): Promis
     throw new Error(`Payment amount mismatch. Expected ${expectedAmount} kobo, received ${verification.data.amount} kobo.`);
   }
 
+  const supabaseAdmin = getSupabaseAdmin();
+
+  // Idempotency check: if the subscription is already ACTIVE with this tier
+  // and a non-expired expiry, treat this as a duplicate webhook — no-op.
+  const { data: existing } = await supabaseAdmin
+    .from('user_subscriptions')
+    .select('*')
+    .eq('user_id', uid)
+    .maybeSingle();
+
+  if (existing && existing.status === 'ACTIVE' && existing.tier === tier) {
+    const existingExpiry = existing.subscription_expiry;
+    if (existingExpiry && existingExpiry > Date.now()) {
+      // Already activated — duplicate webhook, return existing state
+      return {
+        uid,
+        tier: existing.tier,
+        status: existing.status,
+        subscriptionExpiry: existingExpiry,
+      };
+    }
+  }
+
   const expiryDays = DURATION_DAYS[cycle];
   const subscriptionExpiry = Date.now() + expiryDays * 24 * 60 * 60 * 1000;
 
-  const db = getAdminFirestore();
-  const subRef = db.doc(`users/${uid}/subscription/current`);
-
-  await subRef.set({
-    userId: uid,
-    tier,
-    status: 'ACTIVE',
-    subscriptionExpiry,
-    usageCount: {
-      vision: 0,
-      audit: 0,
-    },
-    updatedAt: new Date().toISOString(),
-  }, { merge: true });
+  await supabaseAdmin
+    .from('user_subscriptions')
+    .upsert({
+      user_id: uid,
+      tier,
+      status: 'ACTIVE',
+      subscription_expiry: subscriptionExpiry,
+      usage_vision: 0,
+      usage_audit: 0,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id' });
 
   return {
     uid,
@@ -145,18 +174,17 @@ export async function activateSubscriptionFromPayment(reference: string): Promis
 }
 
 export async function cancelSubscription(uid: string): Promise<void> {
-  const db = getAdminFirestore();
-  const subRef = db.doc(`users/${uid}/subscription/current`);
+  const supabaseAdmin = getSupabaseAdmin();
 
-  await subRef.set({
-    userId: uid,
-    tier: SubscriptionTier.FREE,
-    status: 'CANCELLED',
-    subscriptionExpiry: null,
-    usageCount: {
-      vision: 0,
-      audit: 0,
-    },
-    updatedAt: new Date().toISOString(),
-  }, { merge: true });
+  await supabaseAdmin
+    .from('user_subscriptions')
+    .upsert({
+      user_id: uid,
+      tier: SubscriptionTier.FREE,
+      status: 'CANCELLED',
+      subscription_expiry: null,
+      usage_vision: 0,
+      usage_audit: 0,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id' });
 }

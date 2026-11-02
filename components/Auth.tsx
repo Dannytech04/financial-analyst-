@@ -5,7 +5,7 @@ import {
   loginWithEmail, 
   registerWithEmail, 
   getOrCreateUserProfile 
-} from '@/services/firebase';
+} from '@/services/supabase';
 import { User } from '@/types';
 
 interface AuthProps {
@@ -29,6 +29,27 @@ const LogoMark: React.FC<{ className?: string }> = ({ className = "w-16 h-16" })
   </div>
 );
 
+function mapSupabaseError(msg: string): string {
+  // Map Supabase auth error messages to the existing user-facing messages
+  const lower = msg.toLowerCase();
+  if (lower.includes('invalid login credentials') || lower.includes('invalid credentials')) {
+    return "Invalid Terminal ID or Access Code.";
+  }
+  if (lower.includes('already registered') || lower.includes('already been registered') || lower.includes('user already registered')) {
+    return "This Terminal ID is already registered. Please sign in.";
+  }
+  if (lower.includes('password should be at least') || lower.includes('weak password') || lower.includes('password is too weak')) {
+    return "Access Code is too weak. Minimum 6 characters required.";
+  }
+  if (lower.includes('invalid email') || lower.includes('unable to validate email')) {
+    return "Please enter a valid email address.";
+  }
+  if (lower.includes('rate limit') || lower.includes('too many requests') || lower.includes('for security purposes')) {
+    return "Access temporarily throttled. Please wait a moment and try again.";
+  }
+  return msg || "Authentication signal interrupted.";
+}
+
 const Auth: React.FC<AuthProps> = ({ onLogin }) => {
   const [isLogin, setIsLogin] = useState(true);
   const [email, setEmail] = useState('');
@@ -45,17 +66,18 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     setError(null);
     setIsAuthenticating(true);
     try {
-      const fbUser = await loginWithGoogle();
-      if (fbUser) {
-        const user = await getOrCreateUserProfile(fbUser);
+      const sbUser = await loginWithGoogle();
+      if (sbUser) {
+        const user = await getOrCreateUserProfile(sbUser);
         onLogin(user);
       }
     } catch (e: unknown) {
       const err = e as Error;
-      if (err.message && err.message.includes('popup-closed-by-user')) {
+      const msg = err.message || '';
+      if (msg.includes('popup') || msg.includes('closed') || msg.includes('popup-closed') || msg.includes('popup-redirect')) {
         setError("Sign-in window closed before completion.");
       } else {
-        setError(err.message || "Google Sign-In failed.");
+        setError(mapSupabaseError(msg));
       }
     } finally {
       setIsAuthenticating(false);
@@ -74,33 +96,16 @@ const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     setIsAuthenticating(true);
 
     try {
-      const fbUser = isLogin 
+      const sbUser = isLogin 
         ? await loginWithEmail(email, password) 
         : await registerWithEmail(email, password);
       
-      const user = await getOrCreateUserProfile(fbUser);
+      const user = await getOrCreateUserProfile(sbUser);
       localStorage.setItem('forex_last_email', email);
       onLogin(user);
     } catch (e: unknown) {
       const err = e as Error;
-      let msg = err.message || "";
-      let userFriendlyError = "Authentication signal interrupted.";
-      
-      if (msg.includes('auth/invalid-credential') || msg.includes('auth/wrong-password') || msg.includes('auth/user-not-found')) {
-        userFriendlyError = "Invalid Terminal ID or Access Code.";
-      } else if (msg.includes('auth/email-already-in-use')) {
-        userFriendlyError = "This Terminal ID is already registered. Please sign in.";
-      } else if (msg.includes('auth/weak-password')) {
-        userFriendlyError = "Access Code is too weak. Minimum 6 characters required.";
-      } else if (msg.includes('auth/invalid-email')) {
-        userFriendlyError = "Please enter a valid email address.";
-      } else if (msg.includes('auth/too-many-requests')) {
-        userFriendlyError = "Access temporarily throttled. Please wait a moment and try again.";
-      } else if (msg) {
-        userFriendlyError = msg;
-      }
-      
-      setError(userFriendlyError);
+      setError(mapSupabaseError(err.message || ""));
     } finally {
       setIsAuthenticating(false);
     }

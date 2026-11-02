@@ -1,5 +1,5 @@
-import firebaseConfig from '../firebase-applet-config.json' with { type: 'json' };
 import { SubscriptionTier, UserSubscription } from '../types';
+import { getSupabaseAdmin } from './supabaseAdmin';
 
 export interface AuthenticatedUser {
   uid: string;
@@ -25,8 +25,12 @@ export function clearTestSubscriptions() {
 }
 
 /**
- * Verifies a Firebase Auth ID token from the Authorization header.
+ * Verifies a Supabase Auth JWT from the Authorization header.
  * Rejects untrusted or missing tokens with clear error messages.
+ *
+ * Replaces the former Firebase Identity Toolkit verification. We decode the
+ * JWT locally to inspect structure/expiration, then verify it against the
+ * Supabase auth endpoint to confirm the user exists and the session is valid.
  */
 export async function verifyAuthToken(authHeader?: string): Promise<{ user: AuthenticatedUser; rawToken: string }> {
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -72,35 +76,24 @@ export async function verifyAuthToken(authHeader?: string): Promise<{ user: Auth
       throw new Error('Authentication token expired.');
     }
 
-    // Verify audience / project ID if present
-    if (payload.aud && payload.aud !== firebaseConfig.projectId) {
+    // Verify the token is a Supabase JWT (check iss contains supabase)
+    const supabaseUrl = process.env.SUPABASE_URL || '';
+    if (payload.iss && !payload.iss.includes(supabaseUrl) && !supabaseUrl.includes(payload.iss)) {
+      // Token doesn't match our project; reject
       throw new Error('Authentication token project mismatch.');
     }
 
-    // Authoritative verification against Firebase Identity Toolkit
-    const lookupUrl = `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${firebaseConfig.apiKey}`;
-    const lookupRes = await fetch(lookupUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idToken: token })
-    });
-
-    if (!lookupRes.ok) {
-      const errData = await lookupRes.json().catch(() => ({}));
-      const msg = (errData as any)?.error?.message || 'Authentication verification failed.';
-      throw new Error(`Token verification failed: ${msg}`);
-    }
-
-    const data = await lookupRes.json() as { users?: Array<{ localId: string; email?: string }> };
-    const localId = data.users?.[0]?.localId || payload.sub;
-    if (!localId) {
-      throw new Error('Authentication token missing user ID.');
+    // Authoritative verification: query the Supabase auth user endpoint
+    const supabaseAdmin = getSupabaseAdmin();
+    const { data: userData, error: userErr } = await supabaseAdmin.auth.getUser(token);
+    if (userErr || !userData.user) {
+      throw new Error('Token verification failed: Invalid or revoked session.');
     }
 
     return {
       user: {
-        uid: localId,
-        email: data.users?.[0]?.email || payload.email
+        uid: userData.user.id,
+        email: userData.user.email || payload.email,
       },
       rawToken: token
     };
@@ -110,8 +103,14 @@ export async function verifyAuthToken(authHeader?: string): Promise<{ user: Auth
 }
 
 /**
- * Fetches authoritative subscription document from Firestore.
+ * Fetches authoritative subscription from the user_subscriptions table.
+ * Uses the service-role admin client (bypasses RLS).
  * Never trusts client-reported tier, usageCount, or subscriptionExpiry.
+ *
+ * Preserves FREE fallback behavior:
+ *   - 404 (no row) → FREE/ACTIVE with 0 usage
+ *   - read error → FREE/ACTIVE with 0 usage
+ *   - expired → effective tier downgraded to FREE
  */
 export async function getAuthoritativeSubscription(uid: string, idToken: string): Promise<UserSubscription> {
   if (idToken.startsWith('mock-test-token-') && process.env.NODE_ENV === 'test') {
@@ -153,47 +152,30 @@ export async function getAuthoritativeSubscription(uid: string, idToken: string)
     return sub;
   }
 
-  const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/users/${uid}/subscription/current`;
+  const supabaseAdmin = getSupabaseAdmin();
 
   try {
-    const res = await fetch(firestoreUrl, {
-      headers: {
-        'Authorization': `Bearer ${idToken}`
-      }
-    });
+    const { data, error } = await supabaseAdmin
+      .from('user_subscriptions')
+      .select('*')
+      .eq('user_id', uid)
+      .maybeSingle();
 
-    if (res.status === 404) {
+    if (error) {
+      console.warn(`[Subscription Fetch Warning] DB error for ${uid}:`, error.message);
+      return defaultFreeSubscription(uid);
+    }
+
+    if (!data) {
       // Return default FREE subscription if document not initialized yet
-      return {
-        userId: uid,
-        tier: SubscriptionTier.FREE,
-        status: 'ACTIVE',
-        usageCount: { vision: 0, audit: 0 },
-        subscriptionExpiry: null
-      };
+      return defaultFreeSubscription(uid);
     }
 
-    if (!res.ok) {
-      console.warn(`[Subscription Fetch Warning] HTTP ${res.status} for ${uid}`);
-      return {
-        userId: uid,
-        tier: SubscriptionTier.FREE,
-        status: 'ACTIVE',
-        usageCount: { vision: 0, audit: 0 },
-        subscriptionExpiry: null
-      };
-    }
-
-    const docData = await res.json() as any;
-    const fields = docData.fields || {};
-
-    const tier = (fields.tier?.stringValue as SubscriptionTier) || SubscriptionTier.FREE;
-    const status = fields.status?.stringValue || 'ACTIVE';
-    const rawExpiry = fields.subscriptionExpiry?.integerValue ?? fields.subscriptionExpiry?.stringValue;
-    const subscriptionExpiry = rawExpiry ? Number(rawExpiry) : null;
-
-    const visionCount = Number(fields.usageCount?.mapValue?.fields?.vision?.integerValue || 0);
-    const auditCount = Number(fields.usageCount?.mapValue?.fields?.audit?.integerValue || 0);
+    const tier = (data.tier as SubscriptionTier) || SubscriptionTier.FREE;
+    const status = data.status || 'ACTIVE';
+    const subscriptionExpiry = data.subscription_expiry ?? null;
+    const visionCount = data.usage_vision ?? 0;
+    const auditCount = data.usage_audit ?? 0;
 
     // Verify expiry: If expired, downgrade effective tier to FREE
     let effectiveTier = tier;
@@ -206,23 +188,24 @@ export async function getAuthoritativeSubscription(uid: string, idToken: string)
       tier: effectiveTier,
       status: (subscriptionExpiry && subscriptionExpiry < Date.now()) ? 'EXPIRED' : status,
       subscriptionExpiry,
-      usageCount: {
-        vision: visionCount,
-        audit: auditCount
-      },
-      createdAt: fields.createdAt?.stringValue,
-      updatedAt: fields.updatedAt?.stringValue
+      usageCount: { vision: visionCount, audit: auditCount },
+      createdAt: data.created_at,
+      updatedAt: data.updated_at
     };
   } catch (err) {
     console.error(`[Subscription Error] Failed to fetch subscription for ${uid}:`, err);
-    return {
-      userId: uid,
-      tier: SubscriptionTier.FREE,
-      status: 'ACTIVE',
-      usageCount: { vision: 0, audit: 0 },
-      subscriptionExpiry: null
-    };
+    return defaultFreeSubscription(uid);
   }
+}
+
+function defaultFreeSubscription(uid: string): UserSubscription {
+  return {
+    userId: uid,
+    tier: SubscriptionTier.FREE,
+    status: 'ACTIVE',
+    usageCount: { vision: 0, audit: 0 },
+    subscriptionExpiry: null
+  };
 }
 
 /**
@@ -236,7 +219,6 @@ export function verifyFeatureEntitlement(
   const limits = TIER_LIMITS[tier] || TIER_LIMITS[SubscriptionTier.FREE];
 
   if (feature === 'deep-audit') {
-    // Deep trade analysis requires PRO or ELITE tier
     if (tier === SubscriptionTier.FREE) {
       return {
         allowed: false,
@@ -245,7 +227,6 @@ export function verifyFeatureEntitlement(
         currentUsage: sub.usageCount.audit
       };
     }
-    // Also respect audit quota if not elite
     if (tier === SubscriptionTier.PRO && sub.usageCount.audit >= limits.audit) {
       return {
         allowed: false,
@@ -274,15 +255,12 @@ export function verifyFeatureEntitlement(
     };
   }
 
-  return {
-    allowed: true,
-    limit,
-    currentUsage
-  };
+  return { allowed: true, limit, currentUsage };
 }
 
 /**
- * Authoritatively records and increments usage counters in Firestore.
+ * Authoritatively records and increments usage counters in user_subscriptions.
+ * Uses the service-role admin client to bypass RLS.
  */
 export async function recordServerUsage(
   uid: string,
@@ -292,50 +270,41 @@ export async function recordServerUsage(
 ): Promise<{ vision: number; audit: number }> {
   const newVision = feature === 'vision' ? currentSub.usageCount.vision + 1 : currentSub.usageCount.vision;
   const newAudit = feature === 'audit' ? currentSub.usageCount.audit + 1 : currentSub.usageCount.audit;
-  const now = new Date().toISOString();
 
   // Test mode update
   if (idToken.startsWith('mock-test-token-') && process.env.NODE_ENV === 'test') {
     const updatedSub: UserSubscription = {
       ...currentSub,
       usageCount: { vision: newVision, audit: newAudit },
-      updatedAt: now
+      updatedAt: new Date().toISOString()
     };
     testSubscriptions.set(uid, updatedSub);
     return updatedSub.usageCount;
   }
 
-  const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${firebaseConfig.projectId}/databases/${firebaseConfig.firestoreDatabaseId}/documents/users/${uid}/subscription/current?updateMask.fieldPaths=usageCount&updateMask.fieldPaths=updatedAt`;
+  const supabaseAdmin = getSupabaseAdmin();
 
   try {
-    const payload = {
-      fields: {
-        usageCount: {
-          mapValue: {
-            fields: {
-              vision: { integerValue: String(newVision) },
-              audit: { integerValue: String(newAudit) }
-            }
-          }
-        },
-        updatedAt: { stringValue: now }
-      }
-    };
+    const { data, error } = await supabaseAdmin
+      .from('user_subscriptions')
+      .update({
+        usage_vision: newVision,
+        usage_audit: newAudit,
+        updated_at: new Date().toISOString()
+      })
+      .eq('user_id', uid)
+      .select('usage_vision, usage_audit')
+      .maybeSingle();
 
-    const res = await fetch(firestoreUrl, {
-      method: 'PATCH',
-      headers: {
-        'Authorization': `Bearer ${idToken}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(payload)
-    });
+    if (error) {
+      console.warn(`[Usage Increment Warning] DB returned error for ${uid}:`, error.message);
+    }
 
-    if (!res.ok) {
-      console.warn(`[Usage Increment Warning] Firestore returned ${res.status} for ${uid}`);
+    if (data) {
+      return { vision: data.usage_vision, audit: data.usage_audit };
     }
   } catch (err) {
-    console.error(`[Usage Increment Error] Failed to update Firestore usage for ${uid}:`, err);
+    console.error(`[Usage Increment Error] Failed to update usage for ${uid}:`, err);
   }
 
   return { vision: newVision, audit: newAudit };

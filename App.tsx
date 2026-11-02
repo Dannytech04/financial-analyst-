@@ -23,6 +23,7 @@ import {
 import { Gateway } from '@/services/geminiService';
 import { defaultGoals, storageService } from '@/services/storageService';
 import { 
+  supabase,
   auth, 
   testConnection, 
   subscribeToUserTrades, 
@@ -31,8 +32,7 @@ import {
   saveTradeToFirestore, 
   getOrCreateAuthoritativeUser,
   logoutUser
-} from '@/services/firebase';
-import { onAuthStateChanged } from 'firebase/auth';
+} from '@/services/supabase';
 
 const DEFAULT_LAYOUT: WidgetConfig[] = [
   { id: 'goals', visible: true, label: 'Monthly Targets' },
@@ -78,28 +78,27 @@ const App: React.FC = () => {
     }
   }, [isDarkMode]);
 
-  // Test Firebase connection on initial boot
+  // Test Supabase connection on initial boot
   useEffect(() => {
     testConnection();
   }, []);
 
-  // Central Firebase Authentication Listener
+  // Central Supabase Authentication Listener
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
-      if (fbUser) {
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      const sbUser = session?.user;
+      if (sbUser) {
         try {
-          // Authoritative profile and subscription from Firestore
-          const authoritativeUser = await getOrCreateAuthoritativeUser(fbUser);
+          const authoritativeUser = await getOrCreateAuthoritativeUser(sbUser);
           setUser(authoritativeUser);
         } catch (err) {
-          console.error("Failed to load user profile from Firestore:", err);
-          // Fallback profile strictly with FREE tier and authoritative UID
+          console.error("Failed to load user profile from Supabase:", err);
           const fallbackUser: User = {
-            id: fbUser.uid,
-            userId: fbUser.uid,
-            username: fbUser.displayName || fbUser.email?.split('@')[0] || 'TRADER',
-            displayName: fbUser.displayName || fbUser.email?.split('@')[0] || 'TRADER',
-            email: fbUser.email || '',
+            id: sbUser.id,
+            userId: sbUser.id,
+            username: sbUser.user_metadata?.full_name || sbUser.email?.split('@')[0] || 'TRADER',
+            displayName: sbUser.user_metadata?.full_name || sbUser.email?.split('@')[0] || 'TRADER',
+            email: sbUser.email || '',
             balance: 100000,
             tier: SubscriptionTier.FREE,
             usageCount: { vision: 0, audit: 0 }
@@ -107,7 +106,6 @@ const App: React.FC = () => {
           setUser(fallbackUser);
         }
       } else {
-        // Logged out / unauthenticated
         setUser(null);
         setTrades([]);
         setGoals(defaultGoals);
@@ -115,7 +113,9 @@ const App: React.FC = () => {
       setAuthLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
   }, []);
 
   // Real-time authoritative subscription sync from Firestore (/users/{uid}/subscription/current)
@@ -248,7 +248,7 @@ const App: React.FC = () => {
               <div className="absolute inset-0 bg-violet-600 w-full animate-[loading_2s_infinite_ease-in-out]"></div>
             </div>
             <p className="text-slate-400 dark:text-slate-600 font-mono text-[10px] uppercase tracking-[0.5em] mt-4 animate-pulse">
-              Connecting Authoritative Firestore Node...
+              Connecting Authoritative Supabase Node...
             </p>
           </div>
         </div>

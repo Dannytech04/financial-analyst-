@@ -1,5 +1,5 @@
 import { SubscriptionTier, User } from '@/types';
-import { auth } from './firebase';
+import { supabase } from './supabaseClient';
 
 export interface PlanConfig {
   id: SubscriptionTier;
@@ -48,12 +48,13 @@ export const billingService = {
    * Returns the authorization URL to redirect the user to Paystack's checkout.
    */
   async initializePayment(tier: SubscriptionTier, cycle: 'monthly' | 'yearly'): Promise<{ authorizationUrl: string; reference: string }> {
-    const currentUser = auth.currentUser;
+    const { data: { session } } = await supabase.auth.getSession();
+    const currentUser = session?.user;
     if (!currentUser) {
       throw new Error('Authentication required to upgrade your plan.');
     }
 
-    const token = await currentUser.getIdToken();
+    const token = session.access_token;
     const response = await fetch('/api/payment/initialize', {
       method: 'POST',
       headers: {
@@ -81,12 +82,13 @@ export const billingService = {
    * The server verifies with Paystack and activates the subscription in Firestore.
    */
   async verifyPayment(reference: string): Promise<{ uid: string; tier: SubscriptionTier; status: string; subscriptionExpiry: number }> {
-    const currentUser = auth.currentUser;
+    const { data: { session } } = await supabase.auth.getSession();
+    const currentUser = session?.user;
     if (!currentUser) {
       throw new Error('Authentication required to verify payment.');
     }
 
-    const token = await currentUser.getIdToken();
+    const token = session.access_token;
     const response = await fetch(`/api/payment/verify?reference=${encodeURIComponent(reference)}`, {
       method: 'GET',
       headers: {
@@ -106,12 +108,13 @@ export const billingService = {
    * Cancels the current subscription, downgrading to FREE.
    */
   async cancelSubscription(): Promise<{ status: string; tier: SubscriptionTier }> {
-    const currentUser = auth.currentUser;
+    const { data: { session } } = await supabase.auth.getSession();
+    const currentUser = session?.user;
     if (!currentUser) {
       throw new Error('Authentication required to cancel subscription.');
     }
 
-    const token = await currentUser.getIdToken();
+    const token = session.access_token;
     const response = await fetch('/api/payment/cancel', {
       method: 'POST',
       headers: {

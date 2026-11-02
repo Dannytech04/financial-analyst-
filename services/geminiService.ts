@@ -1,23 +1,22 @@
 import { Trade, User, SubscriptionTier, ChartAnalysisResult, TradeAuditResult } from "@/types";
-import { auth } from "./firebase";
+import { supabase } from "./supabaseClient";
 import { billingService } from "./billingService";
 
 /**
  * Clean client-side service layer communicating with the secure server-side AI Gateway.
- * All Gemini API calls, GEMINI_API_KEY secrets, and model routing reside exclusively on the server.
+ * All AI API calls, model secrets, and routing reside exclusively on the server.
  * Authentication tokens are attached to every request.
  * Quotas and subscription entitlements are enforced server-side.
  */
 class AIGateway {
   private async getAuthHeaders(): Promise<HeadersInit> {
-    const currentUser = auth.currentUser;
-    if (!currentUser) {
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.user) {
       throw new Error("Authentication required to access terminal intelligence. Please initialize session.");
     }
-    const token = await currentUser.getIdToken();
     return {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
+      'Authorization': `Bearer ${session.access_token}`
     };
   }
 
