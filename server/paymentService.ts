@@ -153,7 +153,7 @@ export async function activateSubscriptionFromPayment(reference: string): Promis
   const expiryDays = DURATION_DAYS[cycle];
   const subscriptionExpiry = Date.now() + expiryDays * 24 * 60 * 60 * 1000;
 
-  await supabaseAdmin
+  const { error: activationError } = await supabaseAdmin
     .from('user_subscriptions')
     .upsert({
       user_id: uid,
@@ -164,6 +164,9 @@ export async function activateSubscriptionFromPayment(reference: string): Promis
       usage_audit: 0,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'user_id' });
+  if (activationError) {
+    throw new Error(`Subscription activation failed: ${activationError.message}`);
+  }
 
   return {
     uid,
@@ -176,7 +179,7 @@ export async function activateSubscriptionFromPayment(reference: string): Promis
 export async function cancelSubscription(uid: string): Promise<void> {
   const supabaseAdmin = getSupabaseAdmin();
 
-  await supabaseAdmin
+  const { error } = await supabaseAdmin
     .from('user_subscriptions')
     .upsert({
       user_id: uid,
@@ -187,4 +190,7 @@ export async function cancelSubscription(uid: string): Promise<void> {
       usage_audit: 0,
       updated_at: new Date().toISOString(),
     }, { onConflict: 'user_id' });
+  if (error) {
+    throw new Error(`Subscription cancellation failed: ${error.message}`);
+  }
 }

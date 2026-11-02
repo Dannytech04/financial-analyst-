@@ -1,8 +1,9 @@
 /**
  * Paystack API client — server-side only.
- * Handles transaction initialization and verification.
+ * Handles transaction initialization, verification, and webhook signatures.
  * Secret key must NEVER reach the client.
  */
+import crypto from 'node:crypto';
 
 const PAYSTACK_BASE_URL = 'https://api.paystack.co';
 
@@ -24,11 +25,9 @@ export interface VerifyTransactionResponse {
     domain: string;
     status: 'success' | 'failed' | 'abandoned' | 'pending';
     reference: string;
-    amount: number; // in kobo (subunits)
+    amount: number;
     currency: string;
-    customer: {
-      email: string;
-    };
+    customer: { email: string };
     metadata: {
       custom_fields?: Array<{ display_name: string; variable_name: string; value: string }>;
       [key: string]: unknown;
@@ -68,45 +67,32 @@ export async function initializeTransaction(params: {
   });
 
   const data = await res.json() as InitializeTransactionResponse;
-
   if (!res.ok || !data.status) {
-    const msg = (data as any)?.message || 'Paystack initialization failed.';
-    throw new Error(msg);
+    throw new Error(data?.message || 'Paystack initialization failed.');
   }
-
   return data;
 }
 
 export async function verifyTransaction(reference: string): Promise<VerifyTransactionResponse> {
   const res = await fetch(`${PAYSTACK_BASE_URL}/transaction/verify/${encodeURIComponent(reference)}`, {
     method: 'GET',
-    headers: {
-      'Authorization': `Bearer ${getSecretKey()}`,
-    },
+    headers: { 'Authorization': `Bearer ${getSecretKey()}` },
   });
 
   const data = await res.json() as VerifyTransactionResponse;
-
   if (!res.ok || !data.status) {
-    const msg = (data as any)?.message || 'Transaction verification failed.';
-    throw new Error(msg);
+    throw new Error(data?.message || 'Transaction verification failed.');
   }
-
   return data;
 }
 
-/**
- * Verifies the Paystack webhook signature using HMAC-SHA512.
- * Returns true if the signature matches the raw body.
- */
+/** Verifies the Paystack webhook signature using HMAC-SHA512 over the raw body. */
 export function verifyWebhookSignature(rawBody: string, signature: string | undefined): boolean {
   if (!signature) return false;
-  const crypto = require('crypto');
   const secret = process.env.PAYSTACK_SECRET_KEY;
   if (!secret) return false;
-  const expected = crypto
-    .createHmac('sha512', secret)
-    .update(rawBody)
-    .digest('hex');
-  return expected === signature;
+  const expected = crypto.createHmac('sha512', secret).update(rawBody).digest('hex');
+  const expectedBuffer = Buffer.from(expected, 'utf8');
+  const receivedBuffer = Buffer.from(signature, 'utf8');
+  return expectedBuffer.length === receivedBuffer.length && crypto.timingSafeEqual(expectedBuffer, receivedBuffer);
 }

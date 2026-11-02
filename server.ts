@@ -13,7 +13,7 @@ import {
   auditTradesDeeply,
   analyzeChartImage,
   chatAssistant,
-  GEMINI_MODELS,
+  AI_MODELS,
 } from './server/geminiGateway';
 import { initializePayment, activateSubscriptionFromPayment, cancelSubscription } from './server/paymentService';
 import { verifyWebhookSignature } from './server/paystackService';
@@ -22,7 +22,14 @@ const app = express();
 const PORT = 3000;
 
 // Support larger payload for chart image uploads
-app.use(express.json({ limit: '25mb' }));
+app.use(express.json({
+  limit: '25mb',
+  verify: (req: Request, _res: Response, buffer: Buffer) => {
+    if (req.originalUrl === '/api/payment/webhook') {
+      (req as Request & { rawBody?: string }).rawBody = buffer.toString('utf8');
+    }
+  },
+}));
 
 // Helper to format error responses
 function handleServerError(res: Response, err: unknown, context: string) {
@@ -50,12 +57,12 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({
     status: 'ok',
     serverTime: new Date().toISOString(),
-    supportedModels: GEMINI_MODELS,
+    supportedModels: AI_MODELS,
   });
 });
 
 // 1. Market/News Summaries
-// Model: gemini-3.6-flash
+// Model: gpt-4o-mini
 app.post('/api/ai/news', async (req: Request, res: Response) => {
   try {
     const { user } = await verifyAuthToken(req.headers.authorization);
@@ -74,7 +81,7 @@ app.post('/api/ai/news', async (req: Request, res: Response) => {
 });
 
 // 2. Single Trade Audit
-// Model: gemini-3.6-flash (Structured JSON)
+// Model: gpt-4o-mini (Structured JSON)
 app.post('/api/ai/audit', async (req: Request, res: Response) => {
   try {
     const { user, rawToken } = await verifyAuthToken(req.headers.authorization);
@@ -114,7 +121,7 @@ app.post('/api/ai/audit', async (req: Request, res: Response) => {
 });
 
 // 3. Deep Trade Analysis
-// Model: gemini-3.1-pro-preview with ThinkingLevel.HIGH
+// Model: gpt-4o deep reasoning with fast-model fallback
 app.post('/api/ai/deep-audit', async (req: Request, res: Response) => {
   try {
     const { user, rawToken } = await verifyAuthToken(req.headers.authorization);
@@ -154,7 +161,7 @@ app.post('/api/ai/deep-audit', async (req: Request, res: Response) => {
 });
 
 // 4. Chart Image Analysis
-// Model: gemini-3.6-flash (Structured JSON)
+// Model: gpt-4o-mini (Structured JSON)
 app.post('/api/ai/vision', async (req: Request, res: Response) => {
   try {
     const { user, rawToken } = await verifyAuthToken(req.headers.authorization);
@@ -194,8 +201,8 @@ app.post('/api/ai/vision', async (req: Request, res: Response) => {
 
 // 5. General Chat
 // Model routing:
-// - thinkingMode: true -> gemini-3.1-pro-preview with ThinkingLevel.HIGH
-// - thinkingMode: false -> gemini-3.6-flash
+// - thinkingMode: true -> gpt-4o deep reasoning
+// - thinkingMode: false -> gpt-4o-mini
 app.post('/api/ai/chat', async (req: Request, res: Response) => {
   try {
     const { user } = await verifyAuthToken(req.headers.authorization);
@@ -297,9 +304,12 @@ app.get('/api/payment/verify', async (req: Request, res: Response) => {
 });
 
 // Paystack webhook — server-to-server notification
-app.post('/api/payment/webhook', express.json({ limit: '1mb' }), async (req: Request, res: Response) => {
+app.post('/api/payment/webhook', async (req: Request, res: Response) => {
   try {
-    const rawBody = JSON.stringify(req.body);
+    const rawBody = (req as Request & { rawBody?: string }).rawBody;
+    if (!rawBody) {
+      return res.status(400).json({ error: 'Missing raw webhook body.' });
+    }
     const signature = req.headers['x-paystack-signature'] as string | undefined;
 
     if (!verifyWebhookSignature(rawBody, signature)) {

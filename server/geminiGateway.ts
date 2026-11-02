@@ -129,15 +129,24 @@ ${SAFETY_UNCERTAINTY_CONSTRAINTS}
       35000
     );
 
-    // Extract sources from the response annotations
+    // Extract cited web sources from the response annotations.
     const sources: Array<{ title: string; uri: string }> = [];
-    for (const item of response.output) {
-      if (item.type === 'web_search_call' && item.results) {
-        for (const result of item.results) {
-          sources.push({ title: result.title, uri: result.url });
-        }
+    const seenUris = new Set<string>();
+    const collectSources = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        value.forEach(collectSources);
+        return;
       }
-    }
+      if (!value || typeof value !== 'object') return;
+      const record = value as Record<string, unknown>;
+      const url = typeof record.url === 'string' ? record.url : undefined;
+      if (url && /^https?:\\/\\//.test(url) && !seenUris.has(url)) {
+        seenUris.add(url);
+        sources.push({ title: typeof record.title === 'string' ? record.title : 'Financial Intelligence Source', uri: url });
+      }
+      Object.values(record).forEach(collectSources);
+    };
+    collectSources(response.output);
 
     return {
       text: response.output_text || 'Market briefing data unavailable at this moment.',

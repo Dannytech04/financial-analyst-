@@ -85,32 +85,34 @@ const App: React.FC = () => {
 
   // Central Supabase Authentication Listener
   useEffect(() => {
-    const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      const sbUser = session?.user;
-      if (sbUser) {
-        try {
-          const authoritativeUser = await getOrCreateAuthoritativeUser(sbUser);
-          setUser(authoritativeUser);
-        } catch (err) {
-          console.error("Failed to load user profile from Supabase:", err);
-          const fallbackUser: User = {
-            id: sbUser.id,
-            userId: sbUser.id,
-            username: sbUser.user_metadata?.full_name || sbUser.email?.split('@')[0] || 'TRADER',
-            displayName: sbUser.user_metadata?.full_name || sbUser.email?.split('@')[0] || 'TRADER',
-            email: sbUser.email || '',
-            balance: 100000,
-            tier: SubscriptionTier.FREE,
-            usageCount: { vision: 0, audit: 0 }
-          };
-          setUser(fallbackUser);
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      (async () => {
+        const sbUser = session?.user;
+        if (sbUser) {
+          try {
+            const authoritativeUser = await getOrCreateAuthoritativeUser(sbUser);
+            setUser(authoritativeUser);
+          } catch (err) {
+            console.error("Failed to load user profile from Supabase:", err);
+            const fallbackUser: User = {
+              id: sbUser.id,
+              userId: sbUser.id,
+              username: sbUser.user_metadata?.full_name || sbUser.email?.split('@')[0] || 'TRADER',
+              displayName: sbUser.user_metadata?.full_name || sbUser.email?.split('@')[0] || 'TRADER',
+              email: sbUser.email || '',
+              balance: 100000,
+              tier: SubscriptionTier.FREE,
+              usageCount: { vision: 0, audit: 0 }
+            };
+            setUser(fallbackUser);
+          }
+        } else {
+          setUser(null);
+          setTrades([]);
+          setGoals(defaultGoals);
         }
-      } else {
-        setUser(null);
-        setTrades([]);
-        setGoals(defaultGoals);
-      }
-      setAuthLoading(false);
+        setAuthLoading(false);
+      })();
     });
 
     return () => {

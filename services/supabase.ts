@@ -380,7 +380,6 @@ export async function saveTradeToFirestore(userId: string, trade: Trade): Promis
   try {
     const now = new Date().toISOString();
     const payload: Record<string, unknown> = {
-      user_id: userId,
       trade_id: trade.id,
       pair: trade.pair,
       type: trade.type,
@@ -400,7 +399,7 @@ export async function saveTradeToFirestore(userId: string, trade: Trade): Promis
     if (trade.aiFeedback !== undefined && trade.aiFeedback !== null) payload.ai_feedback = trade.aiFeedback;
     if (trade.isAnalyzing !== undefined && trade.isAnalyzing !== null) payload.is_analyzing = trade.isAnalyzing;
 
-    const { error } = await supabase.from('trades').upsert(payload, { onConflict: 'id' });
+    const { error } = await supabase.from('trades').upsert(payload, { onConflict: 'user_id,trade_id' });
     if (error) throw error;
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
