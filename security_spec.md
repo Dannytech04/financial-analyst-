@@ -1,53 +1,94 @@
-# Firestore Security Specification & Invariants
+# Supabase Security Specification & Invariants
 
 ## Architecture & Source of Truth
-Persistent financial data is authoritative ONLY within Firestore. The browser's `localStorage` is strictly restricted to ephemeral non-critical client preferences (such as dark/light UI theme and widget dashboard layout). Trade journals, monthly goals, user accounts, subscription state, and AI usage counts must never be persisted to or trusted from `localStorage`.
+Persistent financial data is authoritative ONLY within Supabase (Postgres). The browser's `localStorage` is strictly restricted to ephemeral non-critical client preferences (such as dark/light UI theme and widget dashboard layout). Trade journals, monthly goals, user accounts, subscription state, and AI usage counts must never be persisted to or trusted from `localStorage`.
 
-### Document Hierarchy & Scope
-1. **User Profile**: `/users/{userId}`
-   - *Client-Editable Fields*: `username`, `displayName`, `email`, `updatedAt`
-   - *Immutable Fields*: `userId`, `createdAt`
-   - *Disallowed Fields*: `tier`, `usageCount`, `subscriptionExpiry` (migrated to subscription subcollection to prevent client privilege escalation)
-2. **Trade Records**: `/users/{userId}/trades/{tradeId}`
-   - *Client-Editable Fields*: `pair`, `type`, `entryPrice`, `exitPrice`, `lotSize`, `pnl`, `status`, `session`, `timestamp`, `notes`, `riskPercent`, `aiFeedback`, `isAnalyzing`, `updatedAt`
-   - *Immutable Fields*: `userId`, `tradeId`, `createdAt`
+### Tables & Column Scope
+
+1. **user_profiles** (`user_id` references `auth.users.id`)
+   - *Client-Editable Columns*: `username`, `display_name`, `email`, `updated_at`
+   - *Immutable Columns*: `user_id`, `created_at`
+   - *Disallowed Columns*: `tier`, `usage_count`, `subscription_expiry` (live in `user_subscriptions`; client has no INSERT/UPDATE on them here)
+2. **trades** (`user_id` references `auth.users.id`)
+   - *Client-Editable Columns*: `pair`, `type`, `entry_price`, `exit_price`, `lot_size`, `pnl`, `status`, `session`, `timestamp`, `notes`, `risk_percent`, `ai_feedback`, `is_analyzing`, `updated_at`, `trade_id` (client-generated on INSERT, immutable on UPDATE)
+   - *Immutable Columns*: `user_id`, `created_at`, `id`
    - *Strict Enums*: `type` ('BUY' | 'SELL'), `status` ('WIN' | 'LOSS' | 'BE'), `session` ('LONDON' | 'NEW_YORK' | 'ASIAN' | 'OVERLAP')
-3. **User Goals**: `/users/{userId}/goals/settings`
-   - Fixed document ID: `settings`
-   - *Client-Editable Fields*: `monthlyProfitTarget`, `winRateTarget`, `tradesPerMonthTarget`, `updatedAt`
-   - *Immutable Fields*: `userId`, `createdAt`
-4. **User Subscription & Usage**: `/users/{userId}/subscription/current`
-   - Fixed document ID: `current`
-   - *Server-Controlled Protected Fields*: `tier`, `subscriptionExpiry`, `userId`, `balance`
-   - *Monotonic Fields*: `usageCount.vision`, `usageCount.audit` (client can only increment, never decrease)
-   - *Initial Creation*: Only `tier: 'FREE'` and initial zeroed counters `{ vision: 0, audit: 0 }` allowed.
+   - *Deduplication*: unique constraint on `(user_id, trade_id)`
+3. **user_goals** (`user_id` references `auth.users.id`, one row per user)
+   - *Client-Editable Columns*: `monthly_profit_target`, `win_rate_target`, `trades_per_month_target`, `updated_at`
+   - *Immutable Columns*: `user_id`, `created_at`, `id`
+   - *No DELETE*: authenticated role has DELETE revoked
+4. **user_subscriptions** (`user_id` references `auth.users.id`, one row per user)
+   - *Server-Controlled Protected Columns*: `tier`, `subscription_expiry`, `user_id`, `balance`
+   - *Monotonic Columns*: `usage_count.vision`, `usage_count.audit` (client can only increment via `increment_usage` SECURITY DEFINER function; direct column UPDATE is revoked)
+   - *Client-Editable Columns*: none beyond what the server function allows
+   - *Initial Creation*: server inserts `tier: 'FREE'` and zeroed counters `{ vision: 0, audit: 0 }`
+   - *No DELETE*: authenticated role has DELETE revoked
 
 ---
 
 ## Core Security Invariants
-1. **Authentication Boundary**: Unauthenticated requests are rejected on all paths.
-2. **User Isolation**: Authenticated users can only read and write documents inside their own subtree (`request.auth.uid == userId`). Cross-user reads or writes are rejected.
-3. **Collection Listing Prohibition**: The root `/users` collection cannot be listed or queried by any client (`allow list: if false`).
-4. **Document ID Hardening**: All dynamic document IDs (`tradeId`, `userId`) must be strictly alphanumeric (plus `_` and `-`), non-empty, and maximum 128 characters. Singletons must match fixed paths (`settings`, `current`).
-5. **Anti-Ghost Field (Zero Shadow Fields)**: Every document write (`create` and `update`) validates that incoming fields are an exact subset of the allowlisted schema keys. Any extra or ghost fields (e.g. `isAdmin`, `isPro`, `role`) immediately fail.
-6. **Tier Privilege Escalation Defense**: Clients cannot create documents with `tier: 'PRO'` or `tier: 'ELITE'`. Updates to subscription documents cannot change `tier` or `subscriptionExpiry`.
-7. **Usage Monotonicity**: Decreasing AI usage counters via client updates is blocked by rule `incoming().usageCount[x] >= existing().usageCount[x]`.
-8. **Ownership Immutability**: On update, `incoming().userId == existing().userId` ensures that ownership cannot be transferred or spoofed.
+
+1. **Authentication Boundary**: Unauthenticated requests are rejected. RLS policies are scoped `TO authenticated`; the `anon` role has no privileges on any table.
+2. **User Isolation**: RLS policies enforce `auth.uid() = user_id` on every SELECT, INSERT, UPDATE, and DELETE. Cross-user reads or writes are rejected.
+3. **No Collection Listing**: There is no root-level listing surface; Supabase does not expose a "list all users" path to the client.
+4. **Column-Level Privilege Separation**: Row policies alone do not restrict which columns can be written. Table-level INSERT/UPDATE grants are revoked and replaced with column-restricted grants on only the client-owned fields. Privileged columns (`tier`, `subscription_expiry`, `balance`, `usage_count`) are writable only by the service-role client (server) or the `increment_usage` SECURITY DEFINER function.
+5. **Anti-Ghost Field Defense**: Postgres rejects unknown columns at the database level — inserting a field not defined in the table schema fails with a 42703 error. No extra/ghost fields can be written.
+6. **Tier Privilege Escalation Defense**: Clients have no INSERT or UPDATE grant on `tier` or `subscription_expiry` in `user_subscriptions`. Only the service-role client (server) can set these. A client cannot create or upgrade their own tier.
+7. **Usage Monotonicity**: Direct UPDATE on `usage_count` is revoked from authenticated. The `increment_usage` SECURITY DEFINER function atomically increments counters and only allows values >= existing. Counters can never decrease through any client path.
+8. **Ownership Immutability**: `user_id` has no client INSERT/UPDATE grant on trades, user_goals, or user_subscriptions. On `user_profiles`, `user_id` defaults to `auth.uid()` and is not client-writable. Ownership cannot be transferred or spoofed.
+9. **Trade Identity Immutability**: `trade_id` is client-settable on INSERT (client-generated deduplication key) but is excluded from the UPDATE grant, making it immutable after creation.
+10. **Singleton Enforcement**: `user_goals` and `user_subscriptions` are one-row-per-user by upsert with `onConflict: 'user_id'`. DELETE is revoked so clients cannot delete and recreate to reset state.
+11. **Function Search Path Pinning**: All SECURITY DEFINER functions (`set_updated_at`, `increment_usage`) pin `SET search_path = public` to prevent search_path shadowing attacks.
+12. **Function Execute Grants**: `increment_usage` has EXECUTE revoked from PUBLIC/anon/authenticated and granted only to `service_role`. `set_updated_at` is a trigger function granted to the table owner. No privileged function is callable by client roles.
 
 ---
 
-## The Dirty Dozen Test Suite Matrix
-The test runner (`firestore.rules.test.ts`) verifies that every malicious or malformed payload is rejected with `PERMISSION_DENIED`:
+## RLS Policy Summary
 
-1. **Unauthenticated Read**: Anonymous client attempts to read `/users/{uid}`, `/users/{uid}/trades/{tradeId}`, `/users/{uid}/goals/settings`, or `/users/{uid}/subscription/current`.
-2. **Cross-User Trade Access**: User B attempts to read or write `/users/userA/trades/trade1`.
-3. **Cross-User Goal Access**: User B attempts to read or write `/users/userA/goals/settings`.
-4. **Spoofed User ID**: User A attempts to write a trade document with `userId: 'userB'`.
-5. **Spoofed Tier on Create**: User A attempts to create `/users/userA/subscription/current` with `tier: 'PRO'`.
-6. **Spoofed Tier on Update**: User A attempts to update existing `FREE` tier to `PRO` or `ELITE`.
-7. **Spoofed Usage Decrease**: User A attempts to decrease usage counters from `{ vision: 3 }` to `{ vision: 0 }`.
-8. **Ghost Fields Injection**: User A attempts to include unexpected fields like `{ isAdmin: true }` in their user profile or trade document.
-9. **Invalid Data Types**: User A attempts to write a non-numeric `balance` or non-numeric `pnl` string.
-10. **Invalid Enum Values**: User A attempts to write a trade with `type: 'SHORT'` or `status: 'DRAW'` or `session: 'TOKYO'`.
-11. **Oversized Strings**: User A attempts to write a trade with a 30-character `pair` or notes exceeding 2000 characters.
-12. **Invalid Document IDs**: User A attempts to write to `/users/userA/trades/../../bad$id` or a tradeId exceeding 128 characters, or non-singleton goal/subscription paths.
+Every table has RLS enabled with four policies (SELECT, INSERT, UPDATE, DELETE), each scoped `TO authenticated` with `auth.uid() = user_id`:
+
+| Table | SELECT | INSERT | UPDATE | DELETE |
+|-------|--------|--------|--------|--------|
+| user_profiles | own row | own row | own row (column-restricted) | revoked |
+| trades | own rows | own rows (column-restricted) | own rows (column-restricted) | own rows |
+| user_goals | own row | own row (column-restricted) | own row (column-restricted) | revoked |
+| user_subscriptions | own row | none (server-only) | own row (column-restricted) | revoked |
+
+### Column-Restricted Grants
+
+**user_profiles** — UPDATE (`username`, `display_name`, `email`)
+**trades** — INSERT (`trade_id`, `pair`, `type`, `entry_price`, `exit_price`, `lot_size`, `pnl`, `status`, `session`, `timestamp`, `notes`, `risk_percent`, `ai_feedback`, `is_analyzing`); UPDATE (`pair`, `type`, `entry_price`, `exit_price`, `lot_size`, `pnl`, `status`, `session`, `timestamp`, `notes`, `risk_percent`, `ai_feedback`, `is_analyzing`)
+**user_goals** — INSERT (`monthly_profit_target`, `win_rate_target`, `trades_per_month_target`); UPDATE (`monthly_profit_target`, `win_rate_target`, `trades_per_month_target`)
+**user_subscriptions** — UPDATE: none client-writable beyond what the server function controls
+
+---
+
+## Server-Side Enforcement
+
+The Express server uses a Supabase service-role client (bypasses RLS) for all privileged writes:
+
+- **Auth verification**: `verifyAuthToken` decodes the JWT, checks `exp` and `iss`, then calls `supabaseAdmin.auth.getUser(token)` to confirm validity with Supabase Auth.
+- **Subscription authority**: `getAuthoritativeSubscription` reads `user_subscriptions` via the service-role client. Missing or error returns FREE tier. Expired subscriptions are downgraded to FREE in-memory (and the row is updated).
+- **Usage recording**: `recordServerUsage` calls the `increment_usage` SECURITY DEFINER function via the service-role client.
+- **Payment activation**: `activateSubscriptionFromPayment` writes `tier` and `subscription_expiry` via the service-role client. Includes idempotency check: if an ACTIVE subscription with matching tier and future expiry already exists, the existing state is returned without re-writing.
+- **Webhook idempotency**: Paystack webhook verifies HMAC-SHA512 signature using `timingSafeEqual` on the raw body. Duplicate `charge.success` events for the same reference are idempotent because `activateSubscriptionFromPayment` checks for existing ACTIVE state first.
+
+---
+
+## Test Invariants (Supabase RLS)
+
+The following invariants, previously enforced by `firestore.rules.test.ts`, are now enforced by Supabase RLS + column grants + CHECK constraints. A replacement test suite should verify:
+
+1. **Unauthenticated Read/Write**: anon-key client cannot SELECT, INSERT, UPDATE, or DELETE on any table.
+2. **Cross-User Access**: authenticated user B cannot read or write user A's rows in trades, user_goals, or user_subscriptions.
+3. **Spoofed User ID**: client cannot set `user_id` on INSERT (no grant on the column; defaults to `auth.uid()` on user_profiles).
+4. **Spoofed Tier on Create/Update**: client cannot INSERT or UPDATE `tier` on `user_subscriptions` (column not in any client grant).
+5. **Spoofed Usage Decrease**: client cannot directly UPDATE `usage_count`; only `increment_usage` (service-role only) can modify it, and only upward.
+6. **Ghost Fields Injection**: inserting a column not in the schema fails with a Postgres error.
+7. **Invalid Data Types**: CHECK constraints reject non-numeric `balance`, `pnl`, `entry_price`, etc. (columns are typed numeric).
+8. **Invalid Enum Values**: Postgres enum types reject values outside the allowed set (`type`, `status`, `session`, `tier`, `subscription_status`).
+9. **Oversized Strings**: CHECK constraints enforce `pair` length <= 10, `notes` length <= 2000.
+10. **Numeric Bounds**: CHECK constraints enforce `lot_size` > 0, `risk_percent` between 0 and 100, `pnl` bounds, `balance` >= 0, `monthly_profit_target` >= 0, `win_rate_target` between 0 and 100, `trades_per_month_target` >= 0.
+11. **Singleton Immutability**: DELETE on `user_goals` and `user_subscriptions` is revoked; clients cannot delete and recreate to reset state.
+12. **Trade Deduplication**: unique constraint on `(user_id, trade_id)` prevents duplicate trade entries per user.

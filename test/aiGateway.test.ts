@@ -30,7 +30,7 @@ async function runTests() {
 
   try {
     // -------------------------------------------------------------
-    // TEST SECTION 1: VERIFY GEMINI API KEY ABSENT FROM CLIENT BUNDLES
+    // TEST SECTION 1: VERIFY AI_PROVIDER_API_KEY ABSENT FROM CLIENT BUNDLES
     // -------------------------------------------------------------
     console.log('\n--- SECTION 1: Client Bundle Secret Isolation ---');
     const distPath = path.join(process.cwd(), 'dist');
@@ -40,21 +40,21 @@ async function runTests() {
       : [];
 
     let secretFoundInClient = false;
-    const realKey = process.env.GEMINI_API_KEY || '';
+    const realKey = process.env.AI_PROVIDER_API_KEY || '';
     for (const file of clientFiles) {
       if (file.endsWith('.js') || file.endsWith('.html')) {
         const content = fs.readFileSync(file, 'utf8');
         if (realKey && content.includes(realKey)) {
           secretFoundInClient = true;
-          console.error(`Found raw GEMINI_API_KEY in ${file}!`);
+          console.error(`Found raw AI_PROVIDER_API_KEY in ${file}!`);
         }
-        if (content.includes('process.env.GEMINI_API_KEY')) {
+        if (content.includes('process.env.AI_PROVIDER_API_KEY')) {
           secretFoundInClient = true;
-          console.error(`Found process.env.GEMINI_API_KEY reference in ${file}!`);
+          console.error(`Found process.env.AI_PROVIDER_API_KEY reference in ${file}!`);
         }
       }
     }
-    assert(!secretFoundInClient, 'GEMINI_API_KEY is completely absent from all client dist bundles');
+    assert(!secretFoundInClient, 'AI_PROVIDER_API_KEY is completely absent from all client dist bundles');
 
     // -------------------------------------------------------------
     // TEST SECTION 2: UNAUTHORIZED ACCESS VERIFICATION
@@ -135,7 +135,7 @@ async function runTests() {
 
     // 3.2 PRO Tier allowed on Deep Audit
     await sleep(2500);
-    console.log('  Testing PRO tier execution on deep audit (routes to gemini-3.1-pro-preview with Thinking)...');
+    console.log('  Testing PRO tier execution on deep audit (routes to gpt-4o deep reasoning)...');
     const resProDeep = await fetch(`${BASE_URL}/api/ai/deep-audit`, {
       method: 'POST',
       headers: {
@@ -237,12 +237,12 @@ async function runTests() {
     const resHealth = await fetch(`${BASE_URL}/api/health`);
     const healthData = await resHealth.json() as any;
     assert(resHealth.status === 200, 'GET /api/health responds with 200 OK');
-    assert(healthData.supportedModels.FAST_GENERAL === 'gemini-3.6-flash', 'Health specifies gemini-3.6-flash');
-    assert(healthData.supportedModels.DEEP_REASONING === 'gemini-3.1-pro-preview', 'Health specifies gemini-3.1-pro-preview');
+    assert(healthData.supportedModels.FAST_GENERAL === 'gpt-4o-mini', 'Health specifies gpt-4o-mini');
+    assert(healthData.supportedModels.DEEP_REASONING === 'gpt-4o', 'Health specifies gpt-4o');
 
     // 5.2 Market News (/api/ai/news)
     await sleep(3000);
-    console.log('  Testing /api/ai/news with gemini-3.6-flash...');
+    console.log('  Testing /api/ai/news with gpt-4o-mini...');
     const newsToken = 'mock-test-token-free-user-news';
     const resNews = await fetch(`${BASE_URL}/api/ai/news`, {
       method: 'POST',
@@ -263,7 +263,7 @@ async function runTests() {
 
     // 5.3 Single Trade Audit (/api/ai/audit) - Structured JSON
     await sleep(3000);
-    console.log('  Testing /api/ai/audit with gemini-3.6-flash (structured JSON)...');
+    console.log('  Testing /api/ai/audit with gpt-4o-mini (structured JSON)...');
     const auditToken = 'mock-test-token-free-user-audit';
     const resAudit = await fetch(`${BASE_URL}/api/ai/audit`, {
       method: 'POST',
@@ -305,7 +305,7 @@ async function runTests() {
 
     // 5.4 Chart Vision Analysis (/api/ai/vision) - Structured JSON
     await sleep(3000);
-    console.log('  Testing /api/ai/vision with gemini-3.6-flash (structured JSON)...');
+    console.log('  Testing /api/ai/vision with gpt-4o-mini (structured JSON)...');
     const visionToken = 'mock-test-token-free-user-vision';
     const validPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
     const resVision = await fetch(`${BASE_URL}/api/ai/vision`, {
@@ -340,7 +340,7 @@ async function runTests() {
 
     // 5.5 Chat Assistant (/api/ai/chat) - Standard (Fast)
     await sleep(3000);
-    console.log('  Testing /api/ai/chat (Standard Mode: gemini-3.6-flash)...');
+    console.log('  Testing /api/ai/chat (Standard Mode: gpt-4o-mini)...');
     const chatToken = 'mock-test-token-free-user-chat';
     const resChatStd = await fetch(`${BASE_URL}/api/ai/chat`, {
       method: 'POST',
@@ -357,14 +357,14 @@ async function runTests() {
     assert(resChatStd.status === 200 || resChatStd.status === 429, 'POST /api/ai/chat (standard) returns 200 OK or 429 rate limit', JSON.stringify(chatStdData));
     if (resChatStd.status === 200) {
       assert(typeof chatStdData.text === 'string' && chatStdData.text.length > 5, 'Chat returns response text');
-      assert(chatStdData.modelUsed === 'gemini-3.6-flash', 'Standard chat routes to gemini-3.6-flash');
+      assert(chatStdData.modelUsed === 'gpt-4o-mini', 'Standard chat routes to gpt-4o-mini');
     } else {
       assert(typeof chatStdData.error === 'string' && chatStdData.error.includes('rate limit'), 'Chat returns 429 rate limit error');
     }
 
-    // 5.6 Chat Assistant (/api/ai/chat) - Thinking Mode (gemini-3.1-pro-preview with ThinkingLevel.HIGH)
+    // 5.6 Chat Assistant (/api/ai/chat) - Thinking Mode (gpt-4o deep reasoning)
     await sleep(3000);
-    console.log('  Testing /api/ai/chat (Thinking Mode: gemini-3.1-pro-preview with ThinkingLevel.HIGH)...');
+    console.log('  Testing /api/ai/chat (Thinking Mode: gpt-4o deep reasoning)...');
     const thinkingChatToken = 'mock-test-token-pro-user-chat-thinking';
     const resChatThinking = await fetch(`${BASE_URL}/api/ai/chat`, {
       method: 'POST',
@@ -382,8 +382,8 @@ async function runTests() {
     if (resChatThinking.status === 200) {
       assert(typeof chatThinkingData.text === 'string' && chatThinkingData.text.length > 5, 'Thinking chat returns text');
       assert(
-        chatThinkingData.modelUsed === 'gemini-3.1-pro-preview' || chatThinkingData.modelUsed === 'gemini-3.6-flash',
-        'Thinking chat targets gemini-3.1-pro-preview (with resilient fallback to flash if pro quota limit is 0)'
+        chatThinkingData.modelUsed === 'gpt-4o' || chatThinkingData.modelUsed === 'gpt-4o-mini',
+        'Thinking chat targets gpt-4o (with resilient fallback to gpt-4o-mini if pro quota limit is 0)'
       );
     } else {
       assert(typeof chatThinkingData.error === 'string' && chatThinkingData.error.includes('rate limit'), 'Thinking chat returns 429 rate limit error');
